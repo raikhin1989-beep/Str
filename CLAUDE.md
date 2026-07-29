@@ -19,10 +19,16 @@ Two traps in the original template, both already fixed — do not reintroduce th
 
 ## Architecture
 
-`site/` is the deploy payload and `.github/workflows/deploy.yml` is the only executable logic. The workflow deploys over SSH from a GitHub-hosted runner using `appleboy/ssh-action`:
+Two payloads, one workflow. `site/` is static content served from `/var/www/html`; `backend/` is a FastAPI app deployed to `/opt/str-api/src` and run by systemd as `str-api` under a dedicated `strapi` user, listening on `127.0.0.1:8000`. Caddy routes `/api/*` to it and serves everything else from disk.
+
+Keep backend source out of `/var/www/html`: that directory is world-readable over HTTP and is rsync'd with `--delete` from `site/` on every deploy. Guest data lives in `/opt/str-api/data`, which the deploy never touches.
+
+`.github/workflows/deploy.yml` remains the only executable logic. It deploys over SSH from a GitHub-hosted runner:
 
 - **Push to `main` deploys.** The `push` trigger is filtered to `site/**` and the workflow file itself, so doc-only commits don't redeploy. `workflow_dispatch` also offers `deploy` and `inspect` (read-only probe: OS, listeners on 80/443, Caddy status, live `Caddyfile`, issued certs, `version`, disk).
-- **Whatever is in `site/` becomes the docroot.** The tree is tarred, base64'd into `SITE_B64`, passed through the action's `envs`, and unpacked on the server, then `rsync -a --delete` syncs it into `/var/www/html`. `--delete` means files removed from `site/` disappear from the server — the docroot mirrors the repo, so don't hand-place files on the host expecting them to survive.
+- **Files travel by `rsync` over `sshpass`, not through the action's `envs`.** An earlier version base64'd the site into an environment variable; that silently stopped delivering once self-hosted fonts pushed the payload past ~450 KB. Do not reintroduce it — binary assets belong in an rsync.
+- **Whatever is in `site/` becomes the docroot**, synced with `--delete`. Files removed from `site/` disappear from the server, so don't hand-place files on the host expecting them to survive.
+- **The backend is rebuilt in place each deploy:** venv at `/opt/str-api/venv`, `pip install -r requirements.txt`, systemd unit regenerated with `APP_VERSION` set to the commit SHA, then `systemctl restart str-api`. The deploy fails loudly (dumping `journalctl -u str-api`) if `/api/health` does not answer within ~50 s.
 - **Caddy serves the site and owns TLS**, installed from the official Cloudsmith apt repo. nginx is explicitly `systemctl disable --now`d to free ports 80/443, but not purged, so the migration is reversible.
 - **No Docker, deliberately.** Packages come from `apt` because pulling images from Docker Hub is unreliable on that server. Don't "modernize" this into a container deploy without an explicit request.
 - **Serialized runs.** `concurrency: group: deploy-server` with `cancel-in-progress: false`, so deploys queue instead of racing.

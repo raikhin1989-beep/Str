@@ -19,6 +19,7 @@ on:
     branches: [main]
     paths:
       - 'site/**'
+      - 'backend/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
     inputs:
@@ -143,6 +144,18 @@ jobs:
             fi
             caddy version
 
+            echo "=== python для бэкенда ==="
+            apt-get install -y -qq python3 python3-venv >/dev/null
+            python3 --version
+
+            # Бэкенд работает под отдельным системным пользователем, а не под
+            # root: у него будет доступ на запись только к своему каталогу
+            # данных. Исходники лежат вне /var/www/html — тот каталог
+            # синхронизируется с --delete и виден снаружи.
+            id -u strapi >/dev/null 2>&1 || \
+              useradd --system --home-dir /opt/str-api --shell /usr/sbin/nologin strapi
+            mkdir -p /opt/str-api/src /opt/str-api/data
+
             echo "=== освобождаем порты 80/443 от nginx ==="
             systemctl disable --now nginx >/dev/null 2>&1 || true
 
@@ -170,6 +183,15 @@ jobs:
             -e "ssh -p $SERVER_SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
             site/ "$SERVER_LOGIN@$SERVER_ADDR:/var/www/html/"
 
+      - name: Upload backend
+        env:
+          SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+        run: |
+          set -e
+          sshpass -e rsync -az --delete \
+            -e "ssh -p $SERVER_SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            backend/ "$SERVER_LOGIN@$SERVER_ADDR:/opt/str-api/src/"
+
       - name: Configure Caddy and verify
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -184,20 +206,75 @@ jobs:
             printf '%s\n' "$GITHUB_SHA" > /var/www/html/version
             chmod -R a+rX /var/www/html
 
+            echo "=== зависимости бэкенда ==="
+            [ -x /opt/str-api/venv/bin/python ] || python3 -m venv /opt/str-api/venv
+            /opt/str-api/venv/bin/pip install --quiet --upgrade pip
+            /opt/str-api/venv/bin/pip install --quiet -r /opt/str-api/src/requirements.txt
+            /opt/str-api/venv/bin/python -c "import fastapi; print('fastapi', fastapi.__version__)"
+
+            echo "=== systemd-юнит ==="
+            cat > /etc/systemd/system/str-api.service <<UNIT
+            [Unit]
+            Description=Str invitation API
+            After=network.target
+
+            [Service]
+            Type=simple
+            User=strapi
+            Group=strapi
+            WorkingDirectory=/opt/str-api/src
+            Environment=APP_VERSION=$GITHUB_SHA
+            Environment=STR_DATA_DIR=/opt/str-api/data
+            ExecStart=/opt/str-api/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
+            Restart=always
+            RestartSec=3
+
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+            # Отступы выше нужны YAML-блоку, systemd их не понимает — срезаем.
+            sed -i 's/^[[:space:]]*//' /etc/systemd/system/str-api.service
+
+            chown -R strapi:strapi /opt/str-api
+            systemctl daemon-reload
+            systemctl enable str-api >/dev/null 2>&1 || true
+            systemctl restart str-api
+
+            echo "=== ждём бэкенд на 127.0.0.1:8000 ==="
+            api_ok=""
+            for i in $(seq 1 25); do
+              if curl -fsS -o /dev/null http://127.0.0.1:8000/api/health; then api_ok=1; break; fi
+              sleep 2
+            done
+            if [ -z "$api_ok" ]; then
+              echo "::error::бэкенд не поднялся — логи ниже"
+              journalctl -u str-api --no-pager -n 60 || true
+              exit 1
+            fi
+            echo "api напрямую: $(curl -fsS http://127.0.0.1:8000/api/health)"
+
             echo "=== пишем Caddyfile ==="
+            # /api/* уходит на uvicorn, всё остальное отдаётся статикой.
+            site_block() {
+              printf '%s {\n' "$1"
+              printf '\tencode gzip\n'
+              printf '\thandle /api/* {\n\t\treverse_proxy 127.0.0.1:8000\n\t}\n'
+              printf '\thandle {\n\t\troot * /var/www/html\n\t\tfile_server\n\t}\n'
+              printf '}\n\n'
+            }
             if [ -n "$SITE_DOMAIN" ]; then
               # Адрес сервера прописывается явно, а не как ':80' — блок без
               # host-матчера затенил бы маршруты домена.
               {
                 if [ -n "$ACME_EMAIL" ]; then printf '{\n\temail %s\n}\n\n' "$ACME_EMAIL"; fi
-                printf '%s {\n\troot * /var/www/html\n\tfile_server\n\tencode gzip\n}\n\n' "$SITE_DOMAIN"
+                site_block "$SITE_DOMAIN"
                 # Редирект прописан явно: наличие блока http://<IP> на :80 отключает
                 # автогенерацию редиректа для домена.
                 printf 'http://%s {\n\tredir https://%s{uri} permanent\n}\n\n' "$SITE_DOMAIN" "$SITE_DOMAIN"
-                printf 'http://%s {\n\troot * /var/www/html\n\tfile_server\n\tencode gzip\n}\n' "$SERVER_ADDR"
+                site_block "http://$SERVER_ADDR"
               } > /etc/caddy/Caddyfile
             else
-              printf ':80 {\n\troot * /var/www/html\n\tfile_server\n\tencode gzip\n}\n' > /etc/caddy/Caddyfile
+              site_block ":80" > /etc/caddy/Caddyfile
             fi
             caddy fmt --overwrite /etc/caddy/Caddyfile || true
             caddy validate --config /etc/caddy/Caddyfile
@@ -215,6 +292,7 @@ jobs:
             curl -fsS -o /dev/null $H http://127.0.0.1/ && echo "index: OK"
             echo "healthz: $(curl -fsS $H http://127.0.0.1/healthz)"
             echo "version: $(curl -fsS $H http://127.0.0.1/version)"
+            echo "api через Caddy: $(curl -fsS $H http://127.0.0.1/api/health)"
 
             if [ -n "$SITE_DOMAIN" ]; then
               echo "=== ждём сертификат для $SITE_DOMAIN ==="
