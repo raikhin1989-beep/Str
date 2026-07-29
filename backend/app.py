@@ -1,11 +1,8 @@
 """Бэкенд приглашения.
 
-Шаг 3 — приём заявок: POST /api/rsvp сохраняет ответ гостя, GET /api/rsvp
-возвращает его собственную запись по токену, чтобы страница после
-перезагрузки помнила, что человек уже записан.
-
-Публичный список гостей (/api/roster) появится на шаге 4 — и отдавать он
-будет сокращённое имя, а не полное (решение Р4).
+Шаг 4 — приём заявок и публичный список: POST /api/rsvp сохраняет ответ
+гостя, GET /api/rsvp возвращает его собственную запись по токену,
+GET /api/roster — список для всех, с сокращёнными именами.
 
 Все маршруты живут под /api/*: Caddy отдаёт этот префикс сюда, а всё
 остальное — статикой из /var/www/html.
@@ -107,6 +104,54 @@ def health():
         "status": "ok",
         "version": APP_VERSION,
         "uptime_seconds": round(time.time() - STARTED_AT, 1),
+    }
+
+
+def short_name(full: str) -> str:
+    """«Мария Иванова» → «Мария И.» (решение Р4).
+
+    Сокращение делает сервер, а не страница: иначе полные фамилии уезжали бы
+    в браузер любому, кто откроет devtools, и публичность списка означала бы
+    публикацию персональных данных.
+
+    Первое слово считается именем — поле в форме так и подписано («Имя и
+    фамилия»). Если гость всё же напишет фамилию первой, в списке окажется
+    его фамилия целиком; поправить это можно в админке на шаге 5.
+    """
+    parts = [p for p in full.split() if p]
+    if not parts:
+        return "Гость"
+    if len(parts) == 1:
+        return parts[0]
+    initials = " ".join(f"{p[0].upper()}." for p in parts[1:3])
+    return f"{parts[0]} {initials}"
+
+
+# Сколько первых подтвердившихся попадают в «стартовую пятёрку».
+STARTERS = 5
+
+
+@app.get("/api/roster")
+def roster():
+    """Публичный список. Отдаёт только то, что решено показывать всем:
+    сокращённое имя, размер компании и градус готовности. Аллергии и
+    личные сообщения не покидают админку."""
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT name, guests_count, hype FROM guests ORDER BY created_at, id"
+        ).fetchall()
+    return {
+        "entries": len(rows),
+        "people": sum(r["guests_count"] for r in rows),
+        "guests": [
+            {
+                "name": short_name(r["name"]),
+                "guests_count": r["guests_count"],
+                "hype": r["hype"],
+                "starter": i < STARTERS,
+            }
+            for i, r in enumerate(rows)
+        ],
     }
 
 

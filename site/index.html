@@ -400,7 +400,8 @@
     outline: 2px solid var(--hero-gold);
     outline-offset: 1px;
   }
-  .field .hint {
+  /* Не .field .hint: та же подсказка используется и под личной ссылкой. */
+  .hint {
     font-size: 12px;
     opacity: 0.55;
     margin-top: 6px;
@@ -526,9 +527,77 @@
     flex-wrap: wrap;
     gap: 8px;
   }
+  .roster-chip {
+    background: rgba(245,239,224,0.08);
+    border: 1px solid rgba(245,239,224,0.2);
+    padding: 7px 12px;
+    border-radius: 999px;
+    font-size: 13px;
+  }
+  /* Первые пять подтвердившихся — «стартовая пятёрка». */
+  .roster-chip.starter {
+    background: rgba(255,198,71,0.14);
+    border-color: rgba(255,198,71,0.5);
+    color: var(--hero-gold);
+  }
+  .roster-chip .plus { opacity: 0.65; }
   .roster-empty {
     font-size: 13px;
     opacity: 0.55;
+  }
+  .roster-count {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--hero-gold);
+    opacity: 0.85;
+    margin-top: 12px;
+  }
+
+  /* Личная ссылка: позволяет вернуться и поправить ответ с другого
+     устройства, где нет localStorage этого браузера. */
+  .mylink {
+    display: none;
+    margin-top: 16px;
+    background: rgba(245,239,224,0.05);
+    border: 1px dashed rgba(245,239,224,0.3);
+    border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .mylink .cap {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    opacity: 0.6;
+    margin-bottom: 8px;
+  }
+  .mylink-row { display: flex; gap: 8px; align-items: center; }
+  .mylink input {
+    flex: 1;
+    min-width: 0;
+    background: rgba(245,239,224,0.06);
+    border: 1px solid rgba(245,239,224,0.25);
+    color: var(--paper-cream);
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    font-family: var(--font-mono);
+  }
+  .mylink button {
+    flex: none;
+    background: var(--hero-gold);
+    color: var(--court-navy);
+    border: none;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
   }
 
   .note {
@@ -660,8 +729,9 @@
       </div>
 
       <div class="field">
-        <label for="fio">ФИО</label>
-        <input type="text" id="fio" placeholder="Как к вам обращаться" autocomplete="name">
+        <label for="fio">Имя и фамилия</label>
+        <input type="text" id="fio" placeholder="Например: Мария Иванова" autocomplete="name">
+        <div class="hint">В общем списке покажем «Мария И.» — фамилия целиком видна только имениннику.</div>
       </div>
 
       <div class="field">
@@ -704,13 +774,23 @@
       <button class="submit-btn" id="submit-btn">Записаться в состав</button>
       <div class="error-msg" id="error-msg"></div>
       <div class="confirm-msg" id="confirm-msg"></div>
+
+      <div class="mylink" id="mylink">
+        <div class="cap">Ваша личная ссылка</div>
+        <div class="mylink-row">
+          <input type="text" id="mylink-input" readonly>
+          <button type="button" id="mylink-copy">Копировать</button>
+        </div>
+        <div class="hint">Сохраните её, если захотите поправить ответ с другого телефона или компьютера.</div>
+      </div>
     </div>
 
     <div class="roster">
       <div class="roster-title">Уже в составе</div>
       <div class="roster-list" id="roster-list">
-        <div class="roster-empty">Список подтвердивших появится здесь совсем скоро</div>
+        <div class="roster-empty">Пока пусто — станьте первым в составе</div>
       </div>
+      <div class="roster-count" id="roster-count"></div>
     </div>
   </div>
 
@@ -775,6 +855,13 @@
   // поправить ответ, не заводя пароль. Публичный список гостей появится
   // на шаге 4.
   const TOKEN_KEY = 'str-rsvp-token';
+
+  // Личная ссылка вида /?t=<токен> открывает свою запись на любом
+  // устройстве. Токен сразу переносим в localStorage, чтобы дальше
+  // страница работала как обычно.
+  const urlToken = new URLSearchParams(location.search).get('t');
+  if (urlToken) localStorage.setItem(TOKEN_KEY, urlToken);
+
   const submitBtn = document.getElementById('submit-btn');
   const errorMsg = document.getElementById('error-msg');
   const confirmMsg = document.getElementById('confirm-msg');
@@ -786,6 +873,70 @@
   const website = document.getElementById('website');
 
   const KNOWN_DRINKS = ['Виски', 'Вино', 'Пиво', 'Коктейль', 'Безалкогольное'];
+
+  const rosterList = document.getElementById('roster-list');
+  const rosterCount = document.getElementById('roster-count');
+  const mylink = document.getElementById('mylink');
+  const mylinkInput = document.getElementById('mylink-input');
+
+  function showMyLink(token) {
+    mylinkInput.value = location.origin + '/?t=' + encodeURIComponent(token);
+    mylink.style.display = 'block';
+  }
+
+  document.getElementById('mylink-copy').addEventListener('click', async () => {
+    const btn = document.getElementById('mylink-copy');
+    try {
+      await navigator.clipboard.writeText(mylinkInput.value);
+    } catch (e) {
+      // clipboard недоступен без https или при отказе в доступе —
+      // выделяем текст, чтобы гость скопировал руками.
+      mylinkInput.select();
+    }
+    btn.textContent = 'Скопировано';
+    setTimeout(() => { btn.textContent = 'Копировать'; }, 1800);
+  });
+
+  function plural(n, one, few, many) {
+    const m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+    return many;
+  }
+
+  // Экранируем: имя приходит от гостя, вставлять его в HTML как есть нельзя.
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+  }
+
+  async function loadRoster() {
+    try {
+      const res = await fetch('/api/roster');
+      if (!res.ok) throw new Error('bad status');
+      const data = await res.json();
+      if (!data.guests.length) {
+        rosterList.innerHTML = '<div class="roster-empty">Пока пусто — станьте первым в составе</div>';
+        rosterCount.textContent = '';
+        return;
+      }
+      rosterList.innerHTML = data.guests.map(g => {
+        const extra = g.guests_count > 1
+          ? ' <span class="plus">+' + (g.guests_count - 1) + '</span>' : '';
+        return '<div class="roster-chip' + (g.starter ? ' starter' : '') + '">'
+             + esc(g.name) + extra + '</div>';
+      }).join('');
+      rosterCount.textContent = data.entries + ' '
+        + plural(data.entries, 'заявка', 'заявки', 'заявок') + ' · '
+        + data.people + ' ' + plural(data.people, 'человек', 'человека', 'человек')
+        + ' в составе';
+    } catch (e) {
+      rosterList.innerHTML = '<div class="roster-empty">Не удалось загрузить список — обновите страницу</div>';
+      rosterCount.textContent = '';
+    }
+  }
+  loadRoster();
 
   function showError(text) {
     errorMsg.textContent = text;
@@ -823,6 +974,7 @@
       }
       alreadyMsg.style.display = 'block';
       submitBtn.textContent = 'Сохранить изменения';
+      showMyLink(token);
     } catch (e) {
       // Сеть недоступна — просто оставляем пустую форму.
     }
@@ -874,6 +1026,8 @@
       alreadyMsg.style.display = 'block';
       submitBtn.disabled = false;
       submitBtn.textContent = 'Сохранить изменения';
+      showMyLink(data.token);
+      loadRoster();
     } catch (e) {
       showError('Сервер не ответил. Проверьте связь и попробуйте ещё раз.');
       submitBtn.disabled = false;
