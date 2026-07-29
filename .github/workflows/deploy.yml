@@ -145,42 +145,26 @@ jobs:
             echo "::warning::с раннера Telegram тоже недоступен"
           fi
 
-      # Вебхук регистрирует раннер: сервер до Telegram не достаёт. Секрет
-      # выводится из пароля админки, поэтому его не нужно нигде хранить —
-      # сервер вычислит такой же.
-      - name: Register Telegram webhook
+      # Вебхук СНИМАЕМ: блокировка провайдера двусторонняя — Telegram не
+      # может доставить обновление на сервер (проверено: getWebhookInfo дал
+      # Connection timed out, а отметки о принятых вебхуках так и не
+      # появилось). Обновления забирает опросом задача telegram.yml, а
+      # getUpdates и вебхук взаимоисключающи.
+      - name: Disable Telegram webhook
         if: ${{ env.TG_BOT_USERNAME != '' }}
         env:
           TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          PW: ${{ secrets.ADMIN_PASSWORD }}
         run: |
-          if [ -z "$PW" ]; then
-            echo "TG_WEBHOOK=пропущен: не задан ADMIN_PASSWORD" >> "$GITHUB_ENV"; exit 0
-          fi
-          secret=$(printf 'tg-webhook:%s' "$PW" | sha256sum | cut -d' ' -f1)
-          r=$(curl -sS --max-time 25 "https://api.telegram.org/bot$TOKEN/setWebhook" \
-                --data-urlencode "url=https://$SITE_DOMAIN/api/tg/webhook" \
-                --data-urlencode "secret_token=$secret" \
-                --data-urlencode 'allowed_updates=["message"]' 2>&1 || true)
+          r=$(curl -sS --max-time 25 "https://api.telegram.org/bot$TOKEN/deleteWebhook" 2>&1 || true)
           if printf '%s' "$r" | grep -q '"ok":true'; then
-            echo "TG_WEBHOOK=поставлен" >> "$GITHUB_ENV"
+            echo "TG_WEBHOOK=снят, работаем опросом" >> "$GITHUB_ENV"
           else
-            echo "TG_WEBHOOK=НЕ ПОСТАВЛЕН: $(printf '%s' "$r" | head -c 150)" >> "$GITHUB_ENV"
-            echo "::warning::setWebhook не удался"
+            echo "TG_WEBHOOK=НЕ СНЯТ: $(printf '%s' "$r" | head -c 120)" >> "$GITHUB_ENV"
+            echo "::warning::deleteWebhook не удался — опрос будет отдавать 409"
           fi
-          # Отдельно спрашиваем, доходят ли до нас входящие: если Telegram
-          # не может достучаться до сервера, здесь будет last_error_message.
           info=$(curl -sS --max-time 25 "https://api.telegram.org/bot$TOKEN/getWebhookInfo" 2>&1 || true)
-          # Полная картина: ошибка доставки, когда она была и сколько
-          # обновлений скопилось. Свежая ошибка + растущая очередь означают,
-          # что Telegram до нас не достучаться, и вебхук надо менять на опрос.
-          err=$(printf '%s' "$info" | grep -o '"last_error_message":"[^"]*"' | cut -d'"' -f4)
-          when=$(printf '%s' "$info" | grep -o '"last_error_date":[0-9]*' | cut -d: -f2)
           pend=$(printf '%s' "$info" | grep -o '"pending_update_count":[0-9]*' | cut -d: -f2)
-          human=""
-          [ -n "$when" ] && human=$(date -u -d "@$when" '+%d.%m %H:%M UTC' 2>/dev/null)
-          echo "TG_HOOKINFO=ошибка='${err:-нет}' когда='${human:-—}' в_очереди_у_telegram=${pend:-0}" >> "$GITHUB_ENV"
-          echo "getWebhookInfo: ошибка='${err:-нет}' когда='${human:-—}' pending=${pend:-0}"
+          echo "TG_HOOKINFO=вебхук не используется, ждут обработки: ${pend:-0}" >> "$GITHUB_ENV"
 
       # Пакеты ставятся отдельным шагом до заливки файлов: rsync нужен на
       # сервере раньше, чем мы попробуем в него синхронизировать сайт.
@@ -345,8 +329,8 @@ jobs:
               echo "checked_at=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
               echo "с_раннера=$TG_RUNNER"
               echo "бот=${TG_BOT_USERNAME:-<нет>}"
-              echo "вебхук=${TG_WEBHOOK:-не ставился}"
-              echo "доставка_входящих=${TG_HOOKINFO:-не проверялась}"
+              echo "вебхук=${TG_WEBHOOK:-не трогали}"
+              echo "входящие=опросом раз в 30 минут (вебхук заблокирован)"
               echo "исходящие=через задачу GitHub Actions (сервер заблокирован)"
             } > /var/www/html/tg-status
             cat /var/www/html/tg-status

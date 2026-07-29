@@ -160,10 +160,11 @@
     if (d.queue_stuck) h += `, <span class="bad">брошено после 5 попыток: ${esc(d.queue_stuck)}</span>`;
     h += d.last_sent_at ? ` · последняя отправка ${esc(when(d.last_sent_at))}<br>` : '<br>';
     h += d.last_webhook_at
-      ? `<span class="good">✓ входящие доходят</span> — последнее ${esc(when(d.last_webhook_at))}<br>`
-      : '<span class="bad">Входящих от Telegram ещё не было.</span> Нажмите «Старт» в боте и обновите страницу: если тут не появится отметка, значит Telegram до сервера не достучаться и привязку придётся делать опросом.<br>';
-    h += '<span class="muted">Сервер не может писать в Telegram — провайдер блокирует. '
-       + 'Сообщения уходят задачей GitHub Actions раз в час, поэтому ответы бота приходят с задержкой.</span><br>';
+      ? `<span class="good">✓ обновления забираются</span> — последнее ${esc(when(d.last_webhook_at))}<br>`
+      : '<span class="muted">Обновлений от Telegram ещё не забирали.</span><br>';
+    h += '<span class="muted">Провайдер блокирует Telegram в обе стороны, поэтому и отправка, '
+       + 'и приём идут задачей GitHub Actions каждые 30 минут: и ответы бота, и привязка гостей '
+       + 'подтверждаются с задержкой.</span><br>';
     if (d.host_linked) {
       h += '<span class="good">✓ ваш чат привязан</span> · <button class="btn ghost" id="tg-test" style="margin-left:8px">Тестовое сообщение</button>';
     } else {

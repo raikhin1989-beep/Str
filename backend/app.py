@@ -567,14 +567,20 @@ async def tg_webhook(request: Request):
     with db.get_conn() as conn:
         db.set_setting(conn, "last_webhook_at", now_iso())
 
-    update = await request.json()
+    process_update(await request.json())
+    return {"ok": True}
+
+
+def process_update(update: dict) -> None:
+    """Разбор одного обновления. Вызывается и вебхуком, и опросом с раннера —
+    логика одна, различается только способ доставки."""
     msg = update.get("message") or {}
     text = (msg.get("text") or "").strip()
     chat = msg.get("chat") or {}
     chat_id = str(chat.get("id", ""))
     username = chat.get("username") or ""
     if not chat_id:
-        return {"ok": True}
+        return
 
     if text.startswith("/start"):
         parts = text.split(maxsplit=1)
@@ -589,7 +595,6 @@ async def tg_webhook(request: Request):
         enqueue(chat_id, "Я бот приглашения на день рождения Александра.\n\n"
                          f"Чтобы получать напоминание, откройте {SITE_URL} "
                          "и нажмите «Подключить Telegram».", "help")
-    return {"ok": True}
 
 
 def _handle_start(chat_id: str, username: str, code: str) -> None:
@@ -795,3 +800,44 @@ def reminders_run(force: bool = False, _: None = Depends(admin_auth)):
                          (ts, row["id"]))
             queued += 1
     return {"queued": queued, "window_open": in_window, "forced": force}
+
+
+# ── ОПРОС ВМЕСТО ВЕБХУКА ────────────────────────────────────────────────────
+# Блокировка провайдера оказалась двусторонней: Telegram не может доставить
+# обновление на сервер (getWebhookInfo показывал Connection timed out, а
+# отметки о принятых вебхуках так и не появилось). Поэтому обновления
+# забирает раннер через getUpdates и приносит сюда.
+
+class TgUpdates(BaseModel):
+    updates: list[dict] = []
+
+
+@app.get("/api/admin/tg/offset")
+def tg_offset(_: None = Depends(admin_auth)):
+    with db.get_conn() as conn:
+        return {"offset": int(db.get_setting(conn, "tg_offset", "0") or 0)}
+
+
+@app.post("/api/admin/tg/updates")
+def tg_updates(payload: TgUpdates, _: None = Depends(admin_auth)):
+    """Принимает пачку обновлений от раннера и двигает offset.
+
+    Offset хранится здесь, а не на раннере: у задачи нет своего состояния
+    между запусками, и после перезапуска она перечитала бы всё заново.
+    """
+    processed = 0
+    max_id = 0
+    for u in payload.updates:
+        try:
+            process_update(u)
+        except Exception as e:  # одно битое обновление не должно ронять пачку
+            print(f"не удалось обработать обновление {u.get('update_id')}: {e}")
+        max_id = max(max_id, int(u.get("update_id", 0)))
+        processed += 1
+
+    with db.get_conn() as conn:
+        if max_id:
+            db.set_setting(conn, "tg_offset", str(max_id + 1))
+        if processed:
+            db.set_setting(conn, "last_webhook_at", now_iso())
+    return {"processed": processed, "next_offset": max_id + 1 if max_id else None}
