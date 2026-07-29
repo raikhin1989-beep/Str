@@ -1,34 +1,721 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ru">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="robots" content="noindex" />
-  <title>Str — приложение готовится</title>
-  <style>
-    html,body{height:100%;margin:0}
-    body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
-      background:radial-gradient(1200px 600px at 50% -10%,#1b2030 0%,#0f1117 60%);
-      color:#e7eaf0;display:flex;align-items:center;justify-content:center;padding:24px}
-    .card{max-width:560px;background:#171a23;border:1px solid #262b38;border-radius:16px;
-      padding:40px 36px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
-    .badge{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#9aa3b2;
-      border:1px solid #262b38;border-radius:999px;padding:6px 12px;margin-bottom:20px}
-    .dot{width:8px;height:8px;border-radius:50%;background:#35d07f;
-      box-shadow:0 0 0 3px rgba(53,208,127,.15)}
-    h1{font-size:28px;margin:0 0 10px}
-    p{color:#9aa3b2;line-height:1.6;margin:0 0 8px}
-    code{background:#0d0f16;border:1px solid #262b38;border-radius:6px;padding:2px 6px;font-size:12px}
-    .meta{margin-top:24px;padding-top:20px;border-top:1px solid #262b38;font-size:12px;color:#6c7484}
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Александр — 37. Матч всех звёзд</title>
+<meta name="description" content="22 августа, 16:00, лофт в Сити. Юбилейный сезон Александра Раихина — явка строго обязательна.">
+<meta name="theme-color" content="#0c1b3d">
+<meta name="robots" content="noindex">
+
+<!-- Превью ссылки в мессенджерах: гости получат приглашение репостом,
+     без этих тегов вместо карточки будет голый URL. Картинку добавим
+     на шаге 11 вместе с финальной вычиткой. -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="Александр — 37. Матч всех звёзд">
+<meta property="og:description" content="22 августа, 16:00, лофт в Сити. Явка строго обязательна.">
+<meta property="og:url" content="https://raikhin.duckdns.org/">
+<meta property="og:locale" content="ru_RU">
+
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏀</text></svg>">
+<link rel="stylesheet" href="fonts/fonts.css">
+<style>
+  :root {
+    --court-navy: #0c1b3d;
+    --court-navy-2: #0a1530;
+    --cska-red: #d31145;
+    --hero-gold: #ffc647;
+    --paper-cream: #f5efe0;
+    --ink: #12141c;
+    --whiskey: #c77b3e;
+    --line-white: rgba(245,239,224,0.14);
+
+    /* У Anton и Bangers из исходного шаблона нет кириллицы — весь русский
+       текст в них молча падал в системный шрифт. Oswald и Russo One
+       кириллицу поддерживают и держат ту же «табло-стадионную» подачу.
+       Bangers оставлен только для латинского SMART HERO. */
+    --font-display: 'Oswald', 'Arial Narrow', sans-serif;
+    --font-burst: 'Russo One', 'Oswald', sans-serif;
+    --font-comic: 'Bangers', cursive;
+    --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--court-navy);
+    color: var(--paper-cream);
+    font-family: var(--font-body);
+    overflow-x: hidden;
+  }
+
+  .court-bg {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    background:
+      radial-gradient(circle at 15% 8%, rgba(211,17,69,0.18), transparent 45%),
+      radial-gradient(circle at 85% 90%, rgba(255,198,71,0.10), transparent 50%),
+      repeating-linear-gradient(0deg, var(--line-white) 0px, var(--line-white) 1px, transparent 1px, transparent 64px),
+      repeating-linear-gradient(90deg, var(--line-white) 0px, var(--line-white) 1px, transparent 1px, transparent 64px),
+      linear-gradient(180deg, var(--court-navy) 0%, var(--court-navy-2) 100%);
+    pointer-events: none;
+  }
+
+  .wrap {
+    position: relative;
+    z-index: 1;
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 28px 20px 80px;
+  }
+
+  /* ---------- TOP STRIPE ---------- */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    font-size: clamp(11px, 2.6vw, 13px);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--hero-gold);
+    padding: 10px 14px;
+    border: 1px solid rgba(255,198,71,0.35);
+    border-radius: 999px;
+    background: rgba(255,198,71,0.06);
+    width: fit-content;
+    margin: 0 auto 34px;
+  }
+  .topbar::before, .topbar::after { content: "🏀"; font-size: 14px; }
+
+  /* ---------- HERO ---------- */
+  .hero {
+    position: relative;
+    text-align: center;
+    padding: 10px 0 20px;
+  }
+
+  .jersey-number {
+    position: absolute;
+    top: -60px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(220px, 55vw, 420px);
+    line-height: 1;
+    color: transparent;
+    -webkit-text-stroke: 2px rgba(245,239,224,0.10);
+    z-index: -1;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: clamp(12px, 3vw, 14px);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--paper-cream);
+    opacity: 0.7;
+    margin-bottom: 10px;
+  }
+
+  h1.name {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(42px, 10vw, 78px);
+    line-height: 0.98;
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.01em;
+    color: var(--paper-cream);
+    text-shadow: 4px 4px 0 var(--cska-red);
+  }
+
+  .burst {
+    display: inline-block;
+    font-family: var(--font-burst);
+    font-size: clamp(22px, 5.2vw, 34px);
+    color: var(--hero-gold);
+    transform: rotate(-4deg);
+    margin: 14px 0 4px;
+    text-shadow: 2px 2px 0 rgba(0,0,0,0.35);
+  }
+
+  .tagline {
+    font-size: clamp(15px, 3.6vw, 18px);
+    color: var(--paper-cream);
+    opacity: 0.85;
+    max-width: 480px;
+    margin: 10px auto 0;
+    line-height: 1.5;
+  }
+  .tagline b { color: var(--hero-gold); font-weight: 800; }
+
+  /* ---------- SCOREBOARD ---------- */
+  .scoreboard {
+    margin-top: 46px;
+    background: var(--ink);
+    border: 3px solid var(--hero-gold);
+    border-radius: 18px;
+    padding: 22px 18px;
+    box-shadow: 0 14px 0 rgba(0,0,0,0.35);
+  }
+
+  .scoreboard-label {
+    text-align: center;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--hero-gold);
+    margin-bottom: 14px;
+  }
+
+  .clock {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+
+  .clock-cell {
+    text-align: center;
+    background: rgba(255,198,71,0.06);
+    border: 1px solid rgba(255,198,71,0.25);
+    border-radius: 10px;
+    padding: 10px 4px;
+  }
+
+  .clock-num {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(26px, 7vw, 40px);
+    color: var(--paper-cream);
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .clock-cap {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--paper-cream);
+    opacity: 0.6;
+    margin-top: 6px;
+  }
+
+  /* ---------- STAT TILES ---------- */
+  .stats {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+
+  .stat-tile {
+    background: var(--paper-cream);
+    color: var(--ink);
+    border-radius: 14px;
+    padding: 16px 10px;
+    text-align: center;
+    position: relative;
+    box-shadow: 0 6px 0 rgba(0,0,0,0.25);
+  }
+
+  .stat-tile .cap {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    opacity: 0.55;
+    margin-bottom: 6px;
+  }
+
+  .stat-tile .val {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(16px, 4.4vw, 21px);
+    line-height: 1.15;
+  }
+
+  .stat-tile.red { background: var(--cska-red); color: var(--paper-cream); }
+
+  /* ---------- SECTION HEADS ---------- */
+  .section {
+    margin-top: 54px;
+  }
+
+  .section-head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 18px;
+  }
+
+  .section-head .tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--court-navy);
+    background: var(--hero-gold);
+    padding: 5px 10px;
+    border-radius: 6px;
+    font-weight: 700;
+  }
+
+  .section-head h2 {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: clamp(22px, 5.6vw, 30px);
+    margin: 0;
+    text-transform: uppercase;
+    color: var(--paper-cream);
+  }
+
+  /* ---------- DRESS CODE ---------- */
+  .dress-card {
+    background: var(--cska-red);
+    border-radius: 20px;
+    padding: 26px 24px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .dress-card::after {
+    content: "";
+    position: absolute;
+    right: -40px;
+    top: -40px;
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(255,198,71,0.35), transparent 70%);
+  }
+
+  .dress-burst {
+    font-family: var(--font-comic);
+    font-size: clamp(30px, 8vw, 46px);
+    color: var(--hero-gold);
+    transform: rotate(-2deg);
+    display: block;
+    margin-bottom: 8px;
+    text-shadow: 2px 2px 0 rgba(0,0,0,0.3);
+  }
+
+  .dress-card p {
+    font-size: 15px;
+    line-height: 1.6;
+    max-width: 520px;
+    position: relative;
+    z-index: 1;
+  }
+
+  /* ---------- DOSSIER ---------- */
+  .dossier {
+    background: var(--paper-cream);
+    color: var(--ink);
+    border-radius: 20px;
+    padding: 26px 24px;
+  }
+
+  .dossier-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .dossier-row {
+    display: grid;
+    grid-template-columns: 26px 1fr;
+    gap: 14px;
+    padding: 13px 0;
+    border-bottom: 1px dashed rgba(12,27,61,0.18);
+    align-items: start;
+  }
+  .dossier-row:last-child { border-bottom: none; }
+
+  .dossier-icon { font-size: 18px; line-height: 1.4; }
+
+  .dossier-row .label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    opacity: 0.55;
+    margin-bottom: 2px;
+  }
+
+  .dossier-row .value {
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.4;
+  }
+
+  /* ---------- RSVP FORM ---------- */
+  .rsvp-card {
+    background: var(--ink);
+    border: 2px solid var(--hero-gold);
+    border-radius: 20px;
+    padding: 28px 22px;
+  }
+
+  .field {
+    margin-bottom: 18px;
+  }
+
+  .field label {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--hero-gold);
+    margin-bottom: 8px;
+  }
+
+  .field input[type="text"],
+  .field input[type="number"],
+  .field select {
+    width: 100%;
+    background: rgba(245,239,224,0.06);
+    border: 1px solid rgba(245,239,224,0.25);
+    color: var(--paper-cream);
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-family: var(--font-body);
+  }
+  .field input:focus, .field select:focus {
+    outline: 2px solid var(--hero-gold);
+    outline-offset: 1px;
+  }
+  .field select option { background: var(--ink); color: var(--paper-cream); }
+
+  .hype-value {
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 20px;
+    color: var(--hero-gold);
+    text-align: center;
+    margin-top: 8px;
+  }
+
+  .hype-caption {
+    text-align: center;
+    font-size: 13px;
+    opacity: 0.75;
+    margin-top: 2px;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    accent-color: var(--cska-red);
+  }
+
+  .submit-btn {
+    width: 100%;
+    background: var(--cska-red);
+    color: var(--paper-cream);
+    border: none;
+    padding: 16px;
+    border-radius: 12px;
+    font-family: var(--font-display);
+    font-weight: 700;
+    font-size: 17px;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    cursor: pointer;
+    box-shadow: 0 6px 0 rgba(0,0,0,0.4);
+    transition: transform 0.08s ease;
+  }
+  .submit-btn:active { transform: translateY(4px); box-shadow: 0 2px 0 rgba(0,0,0,0.4); }
+  .submit-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    background: rgba(245,239,224,0.15);
+    box-shadow: none;
+  }
+
+  /* Плашка «ещё не работает». Осознанно заметная: форма ниже выглядит
+     полностью рабочей, и без предупреждения гость решит, что записался. */
+  .notice {
+    margin-bottom: 20px;
+    background: rgba(255,198,71,0.10);
+    border: 1px solid rgba(255,198,71,0.45);
+    border-radius: 12px;
+    padding: 14px 16px;
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .notice b {
+    display: block;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--hero-gold);
+    margin-bottom: 6px;
+  }
+
+  /* ---------- ROSTER ---------- */
+  .roster {
+    margin-top: 18px;
+  }
+  .roster-title {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--paper-cream);
+    opacity: 0.6;
+    margin-bottom: 10px;
+  }
+  .roster-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .roster-empty {
+    font-size: 13px;
+    opacity: 0.55;
+  }
+
+  .note {
+    text-align: center;
+    font-size: 12px;
+    opacity: 0.5;
+    margin-top: 20px;
+    line-height: 1.5;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
+</style>
 </head>
 <body>
-  <main class="card">
-    <span class="badge"><span class="dot"></span> Сервис запущен</span>
-    <h1>Str</h1>
-    <p>Пустое веб-приложение развёрнуто и работает. Это стартовая заглушка — реальный функционал появится здесь по мере разработки.</p>
-    <p>Проверка доступности: <code>/healthz</code> → <code>ok</code>. Версия сборки: <code>/version</code>.</p>
-    <p class="meta">Страница лежит в репозитории в каталоге <code>site/</code> и раскатывается на сервер автоматически при пуше в <code>main</code>.</p>
-  </main>
+
+<div class="court-bg"></div>
+<div class="jersey-number" aria-hidden="true">37</div>
+
+<div class="wrap">
+
+  <div class="topbar">СТАРТОВАЯ ПЯТЁРКА · 22 АВГУСТА</div>
+
+  <div class="hero">
+    <div class="eyebrow">Матч всех звёзд</div>
+    <h1 class="name">Александр<br>Раихин</h1>
+    <span class="burst">37 — ЮБИЛЕЙНЫЙ СЕЗОН!</span>
+    <p class="tagline">
+      Капитан чат-бота ВТБ, фанат <b>ЦСКА</b> до последней секунды матча,
+      КМС по жиму лёжа и защитник вселенной Marvel в свободное от отцовства время.
+      В этом сезоне — юбилейная игра. Явка строго обязательна.
+    </p>
+  </div>
+
+  <div class="scoreboard">
+    <div class="scoreboard-label">До броска остаётся</div>
+    <div class="clock" id="clock">
+      <div class="clock-cell"><div class="clock-num" id="dd">00</div><div class="clock-cap">дней</div></div>
+      <div class="clock-cell"><div class="clock-num" id="hh">00</div><div class="clock-cap">часов</div></div>
+      <div class="clock-cell"><div class="clock-num" id="mm">00</div><div class="clock-cap">минут</div></div>
+      <div class="clock-cell"><div class="clock-num" id="ss">00</div><div class="clock-cap">секунд</div></div>
+    </div>
+
+    <div class="stats">
+      <div class="stat-tile red">
+        <div class="cap">Дата</div>
+        <div class="val">22.08.26</div>
+      </div>
+      <div class="stat-tile">
+        <div class="cap">Время</div>
+        <div class="val">16:00</div>
+      </div>
+      <div class="stat-tile red">
+        <div class="cap">Площадка</div>
+        <div class="val">Лофт в Сити</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="tag">Форма одежды</span>
+      <h2>Дресс-код</h2>
+    </div>
+    <div class="dress-card">
+      <span class="dress-burst">SMART HERO</span>
+      <p>
+        Одеваемся по-настоящему нарядно — костюм, платье, всё как для важного матча.
+        Костюмы супергероев целиком не нужны, но один геройский акцент приветствуется:
+        запонки-щит, галстук цвета ЦСКА, брошь Marvel — на ваш вкус.
+        Главное правило: выглядеть так, будто вы сами сегодня побеждаете.
+      </p>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="tag">Досье</span>
+      <h2>Карточка игрока</h2>
+    </div>
+    <div class="dossier">
+      <div class="dossier-grid">
+        <div class="dossier-row">
+          <div class="dossier-icon">🏀</div>
+          <div><div class="label">Клуб</div><div class="value">ЦСКА — с рождения и навсегда</div></div>
+        </div>
+        <div class="dossier-row">
+          <div class="dossier-icon">🥃</div>
+          <div><div class="label">Тактика на вечер</div><div class="value">Хороший виски и разговоры по душам</div></div>
+        </div>
+        <div class="dossier-row">
+          <div class="dossier-icon">💪</div>
+          <div><div class="label">Личный рекорд</div><div class="value">КМС по жиму лёжа — штанга подтвердит</div></div>
+        </div>
+        <div class="dossier-row">
+          <div class="dossier-icon">🦸</div>
+          <div><div class="label">Вселенная</div><div class="value">Marvel, разумеется — и никаких споров</div></div>
+        </div>
+        <div class="dossier-row">
+          <div class="dossier-icon">👨‍👩‍👧</div>
+          <div><div class="label">Главная команда</div><div class="value">Жена и дети — вне конкуренции</div></div>
+        </div>
+        <div class="dossier-row">
+          <div class="dossier-icon">🤖</div>
+          <div><div class="label">Рабочий проект</div><div class="value">Чат-бот ВТБ — отвечает за него лично</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="tag">Ростер</span>
+      <h2>Подтвердить участие</h2>
+    </div>
+
+    <div class="rsvp-card">
+      <div class="notice">
+        <b>Запись пока закрыта</b>
+        Приглашение ещё настраивается: подтверждение участия и вход через Telegram
+        появятся в ближайшие дни. Поля ниже можно потрогать, но ответ сейчас
+        никуда не сохраняется — заходите чуть позже.
+      </div>
+
+      <!-- Разметка формы сохранена целиком: на шаге 3 к этим полям
+           подключится POST /api/rsvp, менять вёрстку не потребуется. -->
+      <div class="field">
+        <label for="fio">ФИО</label>
+        <input type="text" id="fio" placeholder="Как к вам обращаться" autocomplete="name">
+      </div>
+
+      <div class="field">
+        <label for="guests">Количество гостей (с вами)</label>
+        <input type="number" id="guests" min="1" max="10" value="1">
+      </div>
+
+      <div class="field">
+        <label for="drink">Любимый напиток</label>
+        <select id="drink">
+          <option value="Виски">Виски</option>
+          <option value="Вино">Вино</option>
+          <option value="Пиво">Пиво</option>
+          <option value="Коктейль">Коктейль</option>
+          <option value="Безалкогольное">Безалкогольное</option>
+          <option value="other">Свой вариант</option>
+        </select>
+        <input type="text" id="drink-other" placeholder="Напишите свой вариант" style="margin-top:8px; display:none;">
+      </div>
+
+      <div class="field">
+        <label for="hype">Готовность угарать</label>
+        <input type="range" id="hype" min="1" max="10" value="7">
+        <div class="hype-value" id="hype-value">7 / 10</div>
+        <div class="hype-caption" id="hype-caption">Готов гулять до утра</div>
+      </div>
+
+      <button class="submit-btn" id="submit-btn" disabled>Запись откроется скоро</button>
+    </div>
+
+    <div class="roster">
+      <div class="roster-title">Уже в составе</div>
+      <div class="roster-list" id="roster-list">
+        <div class="roster-empty">Список появится, когда откроется запись</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    Список подтвердивших виден всем, у кого есть ссылка на приглашение — это чтобы вся команда видела, кто уже в игре.
+  </div>
+
+</div>
+
+<script>
+  // ---------- Countdown ----------
+  const target = new Date(2026, 7, 22, 16, 0, 0).getTime(); // month is 0-indexed: 7 = August
+
+  function updateClock() {
+    const now = Date.now();
+    let diff = target - now;
+    if (diff < 0) diff = 0;
+    const d = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const h = Math.floor((diff / (1000 * 60 * 60)) % 24);
+    const m = Math.floor((diff / (1000 * 60)) % 60);
+    const s = Math.floor((diff / 1000) % 60);
+    document.getElementById('dd').textContent = String(d).padStart(2, '0');
+    document.getElementById('hh').textContent = String(h).padStart(2, '0');
+    document.getElementById('mm').textContent = String(m).padStart(2, '0');
+    document.getElementById('ss').textContent = String(s).padStart(2, '0');
+  }
+  updateClock();
+  setInterval(updateClock, 1000);
+
+  // ---------- Hype slider ----------
+  const hypeLabels = {
+    1: "Тихонько посижу в уголке",
+    2: "Понаблюдаю со стороны",
+    3: "Пару тостов скажу",
+    4: "Втянусь постепенно",
+    5: "Средний градус веселья",
+    6: "Уже разогреваюсь",
+    7: "Готов гулять до утра",
+    8: "Беру огонь на себя",
+    9: "Танцую на столе (метафорически)",
+    10: "Снесу лофт вместе с именинником"
+  };
+  const hypeInput = document.getElementById('hype');
+  const hypeValue = document.getElementById('hype-value');
+  const hypeCaption = document.getElementById('hype-caption');
+  function renderHype() {
+    hypeValue.textContent = hypeInput.value + " / 10";
+    hypeCaption.textContent = hypeLabels[hypeInput.value];
+  }
+  hypeInput.addEventListener('input', renderHype);
+  renderHype();
+
+  // ---------- Drink "other" toggle ----------
+  const drinkSelect = document.getElementById('drink');
+  const drinkOther = document.getElementById('drink-other');
+  drinkSelect.addEventListener('change', () => {
+    drinkOther.style.display = drinkSelect.value === 'other' ? 'block' : 'none';
+  });
+
+  // Отправка формы и загрузка ростера появятся на шагах 3 и 4.
+  // В исходном шаблоне они обращались к window.storage — это API среды
+  // Claude Artifacts, которого в обычном браузере нет, поэтому код удалён,
+  // а не оставлен «на будущее»: он гарантированно падал в ошибку.
+</script>
+
 </body>
 </html>
