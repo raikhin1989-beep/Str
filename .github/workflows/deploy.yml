@@ -1,10 +1,10 @@
 name: Deploy to server
 
 # Деплой пустого веб-приложения на сервер по SSH силами раннеров GitHub.
-# Самодостаточно: для запуска нужен только этот файл + секреты (файлы приложения
-# workflow создаёт на сервере сам и поднимает контейнер nginx).
+# Ставит nginx через apt и отдаёт статическую страницу на порту 80.
+# Docker не используется (тянуть образы с Docker Hub на этом сервере нестабильно).
 #
-# Секреты репозитория (Settings → Secrets and variables → Actions → New repository secret):
+# Секреты репозитория (Settings → Secrets and variables → Actions):
 #   SERVER_HOST      — IP/домен сервера (например 91.212.150.225)   [обязательно]
 #   SERVER_PASSWORD  — пароль SSH                                    [обязательно]
 #   SERVER_USER      — пользователь SSH (по умолчанию root)          [опционально]
@@ -18,9 +18,6 @@ on:
         type: choice
         options: [inspect, deploy]
         default: inspect
-      publish_port:
-        description: "Порт на сервере под приложение (если 80 занят — укажи другой, напр. 8080)"
-        default: "80"
 
 concurrency:
   group: deploy-server
@@ -39,17 +36,16 @@ jobs:
           username: ${{ secrets.SERVER_USER || 'root' }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT || 22 }}
+          command_timeout: 5m
           script: |
             echo "=== OS ==="; (cat /etc/os-release | head -2) 2>&1 || true
             echo "=== whoami ==="; whoami
-            echo "=== docker ==="; (docker --version && docker compose version) 2>&1 || echo "docker: NOT installed"
-            echo "=== listening 80/443/8080 ==="; (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -E ':80 |:443 |:8080 ' || echo "nothing on 80/443/8080"
+            echo "=== listening 80/443 ==="; (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -E ':80 |:443 ' || echo "nothing on 80/443"
             echo "=== nginx ==="; (nginx -v 2>&1; systemctl is-active nginx 2>/dev/null) || echo "nginx: NOT installed"
-            echo "=== containers ==="; docker ps 2>&1 || true
-            echo "=== who answers :80 ==="; (curl -sS -I http://127.0.0.1/ 2>&1 | head -8) || true
+            echo "=== who answers :80 ==="; (curl -sS -i http://127.0.0.1/ 2>&1 | head -8) || true
             echo "=== disk ==="; df -h / | tail -1
 
-      # ── DEPLOY: создать страницу на сервере и поднять контейнер nginx ─────────
+      # ── DEPLOY: поставить nginx через apt и выложить страницу на :80 ──────────
       - name: Deploy on server
         if: ${{ inputs.action == 'deploy' }}
         uses: appleboy/ssh-action@v1.2.0
@@ -58,13 +54,16 @@ jobs:
           username: ${{ secrets.SERVER_USER || 'root' }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT || 22 }}
-          envs: PUBLISH_PORT
+          command_timeout: 5m
           script: |
             set -e
-            export PUBLISH_PORT="${PUBLISH_PORT:-80}"
-            echo "Публикуем на порт: $PUBLISH_PORT"
-            mkdir -p /opt/str/public
-            cat > /opt/str/public/index.html <<'HTML'
+            export DEBIAN_FRONTEND=noninteractive
+            echo "=== установка nginx через apt ==="
+            apt-get update -qq
+            apt-get install -y -qq nginx
+            echo "=== выкладываем страницу ==="
+            mkdir -p /var/www/html
+            cat > /var/www/html/index.html <<'HTML'
             <!doctype html>
             <html lang="ru">
             <head>
@@ -98,18 +97,14 @@ jobs:
             </body>
             </html>
             HTML
-            printf 'ok\n' > /opt/str/public/healthz
-            if ! command -v docker >/dev/null 2>&1; then
-              echo "Docker не найден — устанавливаю..."
-              curl -fsSL https://get.docker.com | sh
-            fi
-            docker rm -f str-web 2>/dev/null || true
-            docker run -d --name str-web --restart unless-stopped \
-              -p "${PUBLISH_PORT}:80" \
-              -v /opt/str/public:/usr/share/nginx/html:ro \
-              nginx:alpine
-            sleep 2
+            printf 'ok\n' > /var/www/html/healthz
+            echo "=== запускаем nginx ==="
+            systemctl enable nginx >/dev/null 2>&1 || true
+            systemctl restart nginx
+            sleep 1
             echo "=== health check ==="
-            curl -sS -i "http://127.0.0.1:${PUBLISH_PORT}/healthz" | head -5 || true
-        env:
-          PUBLISH_PORT: ${{ github.event.inputs.publish_port || '80' }}
+            curl -sS -i http://127.0.0.1/ | head -5 || true
+            echo "--- /healthz ---"
+            curl -sS http://127.0.0.1/healthz || true
+            echo "=== nginx status ==="
+            systemctl is-active nginx
