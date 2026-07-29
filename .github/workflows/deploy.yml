@@ -123,6 +123,26 @@ jobs:
           # API отвечает голым "OK" или "KO" — KO означает неверный токен/поддомен
           [ "$resp" = "OK" ] || { echo "::error::DuckDNS вернул '$resp' — проверьте DUCKDNS_SUBDOMAIN и DUCKDNS_TOKEN"; exit 1; }
 
+      # Сервер до Telegram не достаёт (провайдер блокирует), поэтому важно
+      # знать, достаёт ли раннер: от этого зависит, можно ли слать
+      # напоминания отсюда.
+      - name: Check Telegram from runner
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "TG_RUNNER=токен не задан" >> "$GITHUB_ENV"; exit 0
+          fi
+          r=$(curl -sS --max-time 20 "https://api.telegram.org/bot$TOKEN/getMe" 2>&1 || echo '{}')
+          if printf '%s' "$r" | grep -q '"ok":true'; then
+            name=$(printf '%s' "$r" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
+            echo "TG_RUNNER=ДОСТУПЕН, бот @$name" >> "$GITHUB_ENV"
+            echo "с раннера Telegram доступен, бот @$name"
+          else
+            echo "TG_RUNNER=НЕДОСТУПЕН и с раннера" >> "$GITHUB_ENV"
+            echo "::warning::с раннера Telegram тоже недоступен"
+          fi
+
       # Пакеты ставятся отдельным шагом до заливки файлов: rsync нужен на
       # сервере раньше, чем мы попробуем в него синхронизировать сайт.
       - name: Prepare server
@@ -219,7 +239,7 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT || 22 }}
           command_timeout: 10m
-          envs: GITHUB_SHA,SITE_DOMAIN,SERVER_ADDR,ACME_EMAIL,ADMIN_PASSWORD,TELEGRAM_BOT_TOKEN
+          envs: GITHUB_SHA,SITE_DOMAIN,SERVER_ADDR,ACME_EMAIL,ADMIN_PASSWORD,TELEGRAM_BOT_TOKEN,TG_RUNNER
           script: |
             set -e
             printf '%s\n' "$GITHUB_SHA" > /var/www/html/version
@@ -285,6 +305,7 @@ jobs:
             mask() { sed "s/${TELEGRAM_BOT_TOKEN:-__nope__}/***/g"; }
             {
               echo "checked_at=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+              echo "с_раннера_github=$TG_RUNNER"
               if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
                 echo "token=не задан"
               else
