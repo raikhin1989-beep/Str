@@ -384,6 +384,7 @@
 
   .field input[type="text"],
   .field input[type="number"],
+  .field textarea,
   .field select {
     width: 100%;
     background: rgba(245,239,224,0.06);
@@ -394,9 +395,26 @@
     font-size: 15px;
     font-family: var(--font-body);
   }
-  .field input:focus, .field select:focus {
+  .field textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
+  .field input:focus, .field select:focus, .field textarea:focus {
     outline: 2px solid var(--hero-gold);
     outline-offset: 1px;
+  }
+  .field .hint {
+    font-size: 12px;
+    opacity: 0.55;
+    margin-top: 6px;
+    line-height: 1.45;
+  }
+
+  /* Ловушка для ботов: человек этого поля не видит и не заполнит.
+     Не display:none — часть ботов такие поля пропускает. */
+  .hp {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
   }
   .field select option { background: var(--ink); color: var(--paper-cream); }
 
@@ -445,8 +463,6 @@
     box-shadow: none;
   }
 
-  /* Плашка «ещё не работает». Осознанно заметная: форма ниже выглядит
-     полностью рабочей, и без предупреждения гость решит, что записался. */
   .notice {
     margin-bottom: 20px;
     background: rgba(255,198,71,0.10);
@@ -464,6 +480,32 @@
     text-transform: uppercase;
     color: var(--hero-gold);
     margin-bottom: 6px;
+  }
+
+  .confirm-msg {
+    display: none;
+    margin-top: 16px;
+    background: rgba(255,198,71,0.12);
+    border: 1px solid rgba(255,198,71,0.4);
+    color: var(--hero-gold);
+    padding: 14px;
+    border-radius: 10px;
+    font-size: 14px;
+    text-align: center;
+    line-height: 1.5;
+  }
+
+  .error-msg {
+    display: none;
+    margin-top: 12px;
+    background: rgba(211,17,69,0.15);
+    border: 1px solid rgba(255,154,154,0.45);
+    color: #ff9a9a;
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-size: 14px;
+    text-align: center;
+    line-height: 1.5;
   }
 
   /* ---------- ROSTER ---------- */
@@ -605,15 +647,18 @@
     </div>
 
     <div class="rsvp-card">
-      <div class="notice">
-        <b>Запись пока закрыта</b>
-        Приглашение ещё настраивается: подтверждение участия и вход через Telegram
-        появятся в ближайшие дни. Поля ниже можно потрогать, но ответ сейчас
-        никуда не сохраняется — заходите чуть позже.
+      <div class="notice" id="already-msg" style="display:none">
+        <b>Вы уже в составе</b>
+        Форма заполнена вашими ответами — можно поменять что угодно и сохранить заново.
+        Новой записи не появится.
       </div>
 
-      <!-- Разметка формы сохранена целиком: на шаге 3 к этим полям
-           подключится POST /api/rsvp, менять вёрстку не потребуется. -->
+      <!-- Ловушка для ботов, людям не видна. -->
+      <div class="hp" aria-hidden="true">
+        <label for="website">Не заполняйте это поле</label>
+        <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+      </div>
+
       <div class="field">
         <label for="fio">ФИО</label>
         <input type="text" id="fio" placeholder="Как к вам обращаться" autocomplete="name">
@@ -644,13 +689,27 @@
         <div class="hype-caption" id="hype-caption">Готов гулять до утра</div>
       </div>
 
-      <button class="submit-btn" id="submit-btn" disabled>Запись откроется скоро</button>
+      <div class="field">
+        <label for="allergies">Аллергии и ограничения в еде</label>
+        <input type="text" id="allergies" placeholder="Например: без орехов, без лактозы" maxlength="200">
+        <div class="hint">Это увидит только именинник — чтобы на столе точно нашлось что-то для вас.</div>
+      </div>
+
+      <div class="field">
+        <label for="message">Личное сообщение имениннику</label>
+        <textarea id="message" placeholder="Пара слов, которые не попадут в общий список" maxlength="500"></textarea>
+        <div class="hint">В общий список не попадёт — только имениннику.</div>
+      </div>
+
+      <button class="submit-btn" id="submit-btn">Записаться в состав</button>
+      <div class="error-msg" id="error-msg"></div>
+      <div class="confirm-msg" id="confirm-msg"></div>
     </div>
 
     <div class="roster">
       <div class="roster-title">Уже в составе</div>
       <div class="roster-list" id="roster-list">
-        <div class="roster-empty">Список появится, когда откроется запись</div>
+        <div class="roster-empty">Список подтвердивших появится здесь совсем скоро</div>
       </div>
     </div>
   </div>
@@ -711,10 +770,116 @@
     drinkOther.style.display = drinkSelect.value === 'other' ? 'block' : 'none';
   });
 
-  // Отправка формы и загрузка ростера появятся на шагах 3 и 4.
-  // В исходном шаблоне они обращались к window.storage — это API среды
-  // Claude Artifacts, которого в обычном браузере нет, поэтому код удалён,
-  // а не оставлен «на будущее»: он гарантированно падал в ошибку.
+  // ---------- RSVP ----------
+  // Токен своей записи держим в localStorage: он позволяет вернуться и
+  // поправить ответ, не заводя пароль. Публичный список гостей появится
+  // на шаге 4.
+  const TOKEN_KEY = 'str-rsvp-token';
+  const submitBtn = document.getElementById('submit-btn');
+  const errorMsg = document.getElementById('error-msg');
+  const confirmMsg = document.getElementById('confirm-msg');
+  const alreadyMsg = document.getElementById('already-msg');
+  const fio = document.getElementById('fio');
+  const guests = document.getElementById('guests');
+  const allergies = document.getElementById('allergies');
+  const message = document.getElementById('message');
+  const website = document.getElementById('website');
+
+  const KNOWN_DRINKS = ['Виски', 'Вино', 'Пиво', 'Коктейль', 'Безалкогольное'];
+
+  function showError(text) {
+    errorMsg.textContent = text;
+    errorMsg.style.display = 'block';
+    confirmMsg.style.display = 'none';
+  }
+
+  function currentDrink() {
+    if (drinkSelect.value !== 'other') return drinkSelect.value;
+    return drinkOther.value.trim();
+  }
+
+  // Возврат гостя: подставляем сохранённые ответы, чтобы он правил их,
+  // а не заполнял всё заново.
+  async function loadOwn() {
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (!token) return;
+    try {
+      const res = await fetch('/api/rsvp?token=' + encodeURIComponent(token));
+      if (res.status === 404) { localStorage.removeItem(TOKEN_KEY); return; }
+      if (!res.ok) return;
+      const g = await res.json();
+      fio.value = g.name;
+      guests.value = g.guests_count;
+      allergies.value = g.allergies || '';
+      message.value = g.message || '';
+      hypeInput.value = g.hype;
+      renderHype();
+      if (KNOWN_DRINKS.includes(g.drink)) {
+        drinkSelect.value = g.drink;
+      } else {
+        drinkSelect.value = 'other';
+        drinkOther.style.display = 'block';
+        drinkOther.value = g.drink;
+      }
+      alreadyMsg.style.display = 'block';
+      submitBtn.textContent = 'Сохранить изменения';
+    } catch (e) {
+      // Сеть недоступна — просто оставляем пустую форму.
+    }
+  }
+  loadOwn();
+
+  submitBtn.addEventListener('click', async () => {
+    errorMsg.style.display = 'none';
+    confirmMsg.style.display = 'none';
+
+    const name = fio.value.trim();
+    if (name.length < 2) { showError('Напишите, пожалуйста, как к вам обращаться.'); return; }
+    const drink = currentDrink();
+    if (!drink) { showError('Выберите напиток или впишите свой вариант.'); return; }
+
+    const payload = {
+      name: name,
+      guests_count: parseInt(guests.value, 10) || 1,
+      drink: drink,
+      hype: parseInt(hypeInput.value, 10),
+      allergies: allergies.value.trim(),
+      message: message.value.trim(),
+      token: localStorage.getItem(TOKEN_KEY),
+      website: website.value
+    };
+
+    const prevLabel = submitBtn.textContent;
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Записываем...';
+
+    try {
+      const res = await fetch('/api/rsvp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        showError(data.error || 'Не получилось сохранить — попробуйте ещё раз.');
+        submitBtn.disabled = false;
+        submitBtn.textContent = prevLabel;
+        return;
+      }
+      localStorage.setItem(TOKEN_KEY, data.token);
+      confirmMsg.textContent = data.updated
+        ? 'Изменения сохранены. До встречи 22 августа в 16:00 🏀'
+        : 'Готово! Вы в стартовом составе. До встречи 22 августа в 16:00 в лофте на Сити 🏀';
+      confirmMsg.style.display = 'block';
+      alreadyMsg.style.display = 'block';
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Сохранить изменения';
+    } catch (e) {
+      showError('Сервер не ответил. Проверьте связь и попробуйте ещё раз.');
+      submitBtn.disabled = false;
+      submitBtn.textContent = prevLabel;
+    }
+  });
 </script>
 
 </body>
