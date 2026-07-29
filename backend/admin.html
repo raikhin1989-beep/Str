@@ -80,6 +80,8 @@
     <button class="btn ghost" id="reload">Обновить</button>
   </div>
 
+  <div class="tg" id="sysinfo" style="margin-bottom:0"></div>
+
   <h2 class="h2">Telegram</h2>
   <div class="tg" id="tg"></div>
 
@@ -142,6 +144,27 @@
     return isNaN(d) ? iso : d.toLocaleString('ru-RU', {
       day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
       timeZone: MSK_TZ });
+  }
+
+  async function loadSysinfo() {
+    const el = document.getElementById('sysinfo');
+    let d;
+    try {
+      const res = await fetch('/api/admin/status');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      d = await res.json();
+    } catch (e) { el.innerHTML = '<span class="bad">Служебная сводка недоступна: ' + esc(e.message) + '</span>'; return; }
+
+    const b = d.backup;
+    let age = 'снимков нет';
+    let cls = 'bad';
+    if (b.last_at) {
+      const hours = (Date.now() - new Date(b.last_at)) / 3600000;
+      age = `${esc(when(b.last_at))} (${Math.round(hours)} ч назад), всего ${esc(b.count)}`;
+      cls = hours < 30 ? 'good' : 'bad';   // бэкап раз в сутки, 30 ч — уже просрочка
+    }
+    el.innerHTML = `Версия: <code>${esc(String(d.version).slice(0,7))}</code> · `
+                 + `бэкап: <span class="${cls}">${age}</span>`;
   }
 
   async function loadTelegram() {
@@ -326,7 +349,7 @@
     }
   });
 
-  function loadAll() { load(); loadBar(); loadTelegram(); loadReminders(); loadAllergies(); }
+  function loadAll() { load(); loadSysinfo(); loadBar(); loadTelegram(); loadReminders(); loadAllergies(); }
   document.getElementById('reload').addEventListener('click', loadAll);
   loadAll();
 </script>

@@ -265,7 +265,6 @@ jobs:
           envs: GITHUB_SHA,SITE_DOMAIN,SERVER_ADDR,ACME_EMAIL,ADMIN_PASSWORD,TELEGRAM_BOT_TOKEN,TG_BOT_USERNAME,TG_RUNNER,TG_WEBHOOK,TG_HOOKINFO
           script: |
             set -e
-            printf '%s\n' "$GITHUB_SHA" > /var/www/html/version
             chmod -R a+rX /var/www/html
 
             echo "=== зависимости бэкенда ==="
@@ -354,20 +353,6 @@ jobs:
             fi
             echo "api напрямую: $(curl -fsS http://127.0.0.1:8000/api/health)"
 
-            echo "=== состояние Telegram ==="
-            # Сервер в Telegram не ходит вообще: провайдер блокирует
-            # api.telegram.org. Здесь только фиксируем, что выяснил раннер,
-            # чтобы это было видно снаружи обычным curl.
-            {
-              echo "checked_at=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-              echo "с_раннера=$TG_RUNNER"
-              echo "бот=${TG_BOT_USERNAME:-<нет>}"
-              echo "вебхук=${TG_WEBHOOK:-не трогали}"
-              echo "входящие=опросом раз в 30 минут (вебхук заблокирован)"
-              echo "исходящие=через задачу GitHub Actions (сервер заблокирован)"
-            } > /var/www/html/tg-status
-            cat /var/www/html/tg-status
-
             echo "=== пишем Caddyfile ==="
             # /api/* уходит на uvicorn, всё остальное отдаётся статикой.
             # /admin отдаёт сам бэкенд — он же проверяет пароль. Auth не в
@@ -413,7 +398,6 @@ jobs:
             H="-H Host:$SERVER_ADDR"
             curl -fsS -o /dev/null $H http://127.0.0.1/ && echo "index: OK"
             echo "healthz: $(curl -fsS $H http://127.0.0.1/healthz)"
-            echo "version: $(curl -fsS $H http://127.0.0.1/version)"
             echo "api через Caddy: $(curl -fsS $H http://127.0.0.1/api/health)"
 
             if [ -n "$SITE_DOMAIN" ]; then
@@ -431,17 +415,20 @@ jobs:
                 exit 1
               fi
 
-              # Логи Actions в этом окружении недоступны, поэтому итог выпуска
-              # сертификата выкладывается рядом с сайтом: издателя видно снаружи
-              # обычным curl. Данные и так публичны (CT-логи).
+              echo "--- сертификат ---"
               echo | openssl s_client -connect "$SITE_DOMAIN:443" -servername "$SITE_DOMAIN" 2>/dev/null \
-                | openssl x509 -noout -issuer -subject -dates > /var/www/html/tls-status 2>/dev/null || true
-              printf 'checked_from=server\ndomain=%s\n' "$SITE_DOMAIN" >> /var/www/html/tls-status
-              echo "--- tls-status ---"; cat /var/www/html/tls-status
+                | openssl x509 -noout -issuer -dates || true
             fi
 
             echo "=== статус Caddy ==="
             systemctl is-active caddy
+
+            # Метку версии пишем в самом конце: тогда свежий SHA на /version
+            # означает, что деплой дошёл до конца, а не только выложил файлы.
+            # Прежде она писалась первой, и упавший деплой выглядел успешным.
+            printf '%s\n' "$GITHUB_SHA" > /var/www/html/version
+            chmod a+r /var/www/html/version
+            echo "version: $GITHUB_SHA"
 
   # ── INSPECT: только осмотреть сервер, ничего не менять ──────────────────────
   inspect:

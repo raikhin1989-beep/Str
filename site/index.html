@@ -4,18 +4,25 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Александр — 37. Матч всех звёзд</title>
-<meta name="description" content="22 августа, 16:00, лофт в Сити. Юбилейный сезон Александра Раихина — явка строго обязательна.">
+<meta name="description" content="22 августа, 16:00, CleverLOFT у метро Тульская. Юбилейный сезон Александра Раихина — явка строго обязательна.">
 <meta name="theme-color" content="#0c1b3d">
 <meta name="robots" content="noindex">
 
 <!-- Превью ссылки в мессенджерах: гости получат приглашение репостом,
-     без этих тегов вместо карточки будет голый URL. Картинку добавим
-     на шаге 11 вместе с финальной вычиткой. -->
+     без этих тегов вместо карточки будет голый URL. Картинка собирается
+     скриптом scripts/make_og.py из того же шаблона и шрифтов, что и сайт,
+     чтобы превью не разъезжалось с приглашением. -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Александр — 37. Матч всех звёзд">
-<meta property="og:description" content="22 августа, 16:00, лофт в Сити. Явка строго обязательна.">
+<meta property="og:description" content="22 августа, 16:00, CleverLOFT у метро Тульская. Явка строго обязательна.">
 <meta property="og:url" content="https://raikhin.duckdns.org/">
 <meta property="og:locale" content="ru_RU">
+<meta property="og:image" content="https://raikhin.duckdns.org/og.png">
+<meta property="og:image:type" content="image/png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Александр Раихин — 37, матч всех звёзд. 22 августа, 16:00, CleverLOFT">
+<meta name="twitter:card" content="summary_large_image">
 
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏀</text></svg>">
 <link rel="stylesheet" href="fonts/fonts.css">
@@ -714,7 +721,7 @@
       </div>
       <div class="stat-tile red">
         <div class="cap">Площадка</div>
-        <div class="val">Лофт в Сити</div>
+        <div class="val">CleverLOFT</div>
       </div>
     </div>
 
@@ -737,6 +744,39 @@
         Главное правило: выглядеть так, будто вы сами сегодня побеждаете.
       </p>
     </div>
+  </div>
+
+
+  <div class="section">
+    <div class="section-head">
+      <span class="tag">Площадка</span>
+      <h2>Где играем</h2>
+    </div>
+    <div class="dossier">
+      <div class="dossier-grid">
+        <div class="dossier-row">
+          <div class="dossier-icon">📍</div>
+          <div><div class="label">Адрес</div><div class="value">CleverLOFT — Холодильный переулок, 3,<br>БЦ «Рябовская мануфактура»</div></div>
+        </div>
+        <div class="dossier-row">
+          <div class="dossier-icon">🚇</div>
+          <div><div class="label">Как добраться</div><div class="value">2 минуты пешком от метро Тульская. У лофта своя входная группа — администратор встретит.</div></div>
+        </div>
+        <div class="dossier-row">
+          <div class="dossier-icon">🌿</div>
+          <div><div class="label">Веранда</div><div class="value">Просторная открытая — если погода позволит, вечер уходит на воздух</div></div>
+        </div>
+        <div class="dossier-row">
+          <div class="dossier-icon">🔊</div>
+          <div><div class="label">Оборудование</div><div class="value">Свет, звук, проектор и диджейский пульт — всё в нашем распоряжении</div></div>
+        </div>
+        <div class="dossier-row">
+          <div class="dossier-icon">🥃</div>
+          <div><div class="label">Бар</div><div class="value">Будет коктейльный бар. Свой напиток тоже можно — отметьте галочкой в форме ниже</div></div>
+        </div>
+      </div>
+    </div>
+    <a class="cal-btn" href="https://yandex.ru/maps/?mode=search&text=%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0%2C%20%D0%A5%D0%BE%D0%BB%D0%BE%D0%B4%D0%B8%D0%BB%D1%8C%D0%BD%D1%8B%D0%B9%20%D0%BF%D0%B5%D1%80%D0%B5%D1%83%D0%BB%D0%BE%D0%BA%2C%203%2C%20%D0%A0%D1%8F%D0%B1%D0%BE%D0%B2%D1%81%D0%BA%D0%B0%D1%8F%20%D0%BC%D0%B0%D0%BD%D1%83%D1%84%D0%B0%D0%BA%D1%82%D1%83%D1%80%D0%B0" target="_blank" rel="noopener">🗺 Построить маршрут</a>
   </div>
 
   <div class="section">
@@ -1156,7 +1196,7 @@
       localStorage.setItem(TOKEN_KEY, data.token);
       confirmMsg.textContent = data.updated
         ? 'Изменения сохранены. До встречи 22 августа в 16:00 🏀'
-        : 'Готово! Вы в стартовом составе. До встречи 22 августа в 16:00 в лофте на Сити 🏀';
+        : 'Готово! Вы в стартовом составе. До встречи 22 августа в 16:00 в CleverLOFT 🏀';
       confirmMsg.style.display = 'block';
       alreadyMsg.style.display = 'block';
       submitBtn.disabled = false;

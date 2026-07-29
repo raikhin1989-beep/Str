@@ -17,7 +17,7 @@ MSK = timezone(timedelta(hours=3))
 EVENT_AT = datetime(2026, 8, 22, 16, 0, tzinfo=MSK)
 EVENT_DURATION = timedelta(hours=6)
 EVENT_TITLE = "Александру 37 — Матч всех звёзд"
-EVENT_LOCATION = "Лофт в Сити, Москва"
+EVENT_LOCATION = ("CleverLOFT, Холодильный переулок, 3, БЦ «Рябовская мануфактура», Москва (2 минуты от метро Тульская)")
 SITE_URL = "https://raikhin.duckdns.org"
 OUT = Path(__file__).resolve().parent.parent / "site" / "calendar.ics"
 

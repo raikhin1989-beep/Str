@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>og</title>
+<link rel="stylesheet" href="../site/fonts/fonts.css">
+<style>
+  :root {
+    --navy: #0c1b3d; --navy2: #0a1530; --red: #d31145;
+    --gold: #ffc647; --cream: #f5efe0; --line: rgba(245,239,224,0.14);
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    background:
+      radial-gradient(circle at 12% 10%, rgba(211,17,69,0.22), transparent 45%),
+      radial-gradient(circle at 88% 92%, rgba(255,198,71,0.13), transparent 50%),
+      repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 72px),
+      repeating-linear-gradient(90deg, var(--line) 0 1px, transparent 1px 72px),
+      linear-gradient(180deg, var(--navy) 0%, var(--navy2) 100%);
+    color: var(--cream);
+    font-family: 'Inter', sans-serif;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    position: relative;
+  }
+  .jersey {
+    position: absolute;
+    top: -70px; left: 50%; transform: translateX(-50%);
+    font-family: 'Oswald', sans-serif; font-weight: 700;
+    font-size: 520px; line-height: 1;
+    color: transparent;
+    -webkit-text-stroke: 3px rgba(245,239,224,0.09);
+  }
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace; font-weight: 700;
+    font-size: 20px; letter-spacing: 0.28em; text-transform: uppercase;
+    color: var(--gold); margin-bottom: 22px;
+  }
+  h1 {
+    font-family: 'Oswald', sans-serif; font-weight: 700;
+    font-size: 104px; line-height: 0.95; text-transform: uppercase;
+    text-shadow: 6px 6px 0 var(--red);
+  }
+  .burst {
+    font-family: 'Russo One', sans-serif; font-size: 42px;
+    color: var(--gold); transform: rotate(-3deg);
+    margin: 26px 0 30px; text-shadow: 3px 3px 0 rgba(0,0,0,0.35);
+  }
+  .facts { display: flex; gap: 14px; }
+  .fact {
+    background: var(--cream); color: #12141c;
+    border-radius: 14px; padding: 14px 26px;
+    font-family: 'Oswald', sans-serif; font-weight: 700; font-size: 26px;
+    box-shadow: 0 7px 0 rgba(0,0,0,0.3);
+  }
+  .fact.red { background: var(--red); color: var(--cream); }
+</style>
+</head>
+<body>
+  <div class="jersey">37</div>
+  <div class="eyebrow">🏀 Матч всех звёзд</div>
+  <h1>Александр<br>Раихин</h1>
+  <div class="burst">37 — ЮБИЛЕЙНЫЙ СЕЗОН!</div>
+  <div class="facts">
+    <div class="fact red">22 августа</div>
+    <div class="fact">16:00</div>
+    <div class="fact red">CleverLOFT</div>
+  </div>
+</body>
+</html>

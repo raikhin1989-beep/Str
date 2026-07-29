@@ -145,12 +145,25 @@ async def validation_handler(request: Request, exc: RequestValidationError):
 
 @app.get("/api/health")
 def health():
-    """Проверка живости.
+    """Проверка живости — единственное, что нужно наружу.
 
-    Версия нужна, чтобы отличать «сервис отвечает» от «отвечает нужный код».
-    Сводка по Telegram — чтобы видеть снаружи, ходит ли задача Actions и не
-    копится ли очередь: логи Actions в этом окружении недоступны. Секретов
-    здесь нет — имя бота и так публично, остальное счётчики и время.
+    Версия остаётся: без неё не отличить «сервис отвечает» от «отвечает тот
+    код, который выложили». Счётчики очереди и возраст бэкапа переехали под
+    пароль в /api/admin/status — гостям они ни к чему.
+    """
+    return {
+        "status": "ok",
+        "version": APP_VERSION,
+        "uptime_seconds": round(time.time() - STARTED_AT, 1),
+    }
+
+
+@app.get("/api/admin/status")
+def admin_status(_: None = Depends(admin_auth)):
+    """Служебная сводка: что смотреть, если что-то встало.
+
+    Возраст снимка тут не для красоты: молчаливо переставший работать бэкап
+    обнаруживается только когда понадобился, а это поздно.
     """
     with db.get_conn() as conn:
         pending = conn.execute(
@@ -161,8 +174,6 @@ def health():
             " ORDER BY sent_at DESC LIMIT 1").fetchone()
         last_poll = db.get_setting(conn, "last_webhook_at")
 
-    # Возраст свежего снимка: молчаливо переставший работать бэкап
-    # обнаруживается только когда он понадобился, а это поздно.
     backup_dir = Path(os.environ.get("STR_BACKUP_DIR", "/opt/str-api/backups"))
     snaps = sorted(backup_dir.glob("str-*.db.gz")) if backup_dir.exists() else []
     last_backup = None
@@ -171,7 +182,6 @@ def health():
             snaps[-1].stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
 
     return {
-        "status": "ok",
         "version": APP_VERSION,
         "uptime_seconds": round(time.time() - STARTED_AT, 1),
         "backup": {"count": len(snaps), "last_at": last_backup},
@@ -656,7 +666,7 @@ def _handle_start(chat_id: str, username: str, code: str) -> None:
         name = row["name"].split()[0] if row["name"].split() else "друг"
 
     enqueue(chat_id, f"{name}, вы в составе! 🏀\n\nНапомню за два дня до "
-                     "праздника — 22 августа, 16:00, лофт в Сити.\n\n"
+                     "праздника — 22 августа, 16:00, CleverLOFT у метро Тульская.\n\n"
                      "Отключить: /stop", "linked")
 
 
@@ -760,7 +770,8 @@ REMIND_BEFORE = timedelta(days=2)
 def reminder_text(row) -> str:
     name = row["name"].split()[0] if row["name"].split() else "Друг"
     return (f"{name}, послезавтра играем! 🏀\n\n"
-            "<b>22 августа, 16:00</b>, лофт в Сити.\n"
+            "<b>22 августа, 16:00</b>, CleverLOFT — Холодильный пер., 3.\n"
+            "2 минуты от метро Тульская.\n"
             "Дресс-код: нарядно плюс один геройский акцент.\n\n"
             f"Поменять ответ: {SITE_URL}")
 
