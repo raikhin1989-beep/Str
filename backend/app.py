@@ -160,10 +160,21 @@ def health():
             "SELECT sent_at FROM outbox WHERE sent_at IS NOT NULL"
             " ORDER BY sent_at DESC LIMIT 1").fetchone()
         last_poll = db.get_setting(conn, "last_webhook_at")
+
+    # Возраст свежего снимка: молчаливо переставший работать бэкап
+    # обнаруживается только когда он понадобился, а это поздно.
+    backup_dir = Path(os.environ.get("STR_BACKUP_DIR", "/opt/str-api/backups"))
+    snaps = sorted(backup_dir.glob("str-*.db.gz")) if backup_dir.exists() else []
+    last_backup = None
+    if snaps:
+        last_backup = datetime.fromtimestamp(
+            snaps[-1].stat().st_mtime, timezone.utc).isoformat(timespec="seconds")
+
     return {
         "status": "ok",
         "version": APP_VERSION,
         "uptime_seconds": round(time.time() - STARTED_AT, 1),
+        "backup": {"count": len(snaps), "last_at": last_backup},
         "telegram": {
             "bot": BOT_USERNAME,
             "last_poll_at": last_poll or None,
@@ -867,76 +878,9 @@ def tg_updates(payload: TgUpdates, _: None = Depends(admin_auth)):
 # будильник сработает, даже если у нас всё отвалится и Telegram останется
 # заблокирован. Поэтому напоминание за два дня зашито прямо в событие.
 
-EVENT_DURATION = timedelta(hours=6)
-EVENT_TITLE = "Александру 37 — Матч всех звёзд"
-EVENT_LOCATION = "Лофт в Сити, Москва"
-
-
-def ics_escape(value: str) -> str:
-    """В тексте iCalendar обратная косая, запятая, точка с запятой и перенос
-    строки — служебные символы, их обязательно экранировать (RFC 5545)."""
-    return (value.replace("\\", "\\\\")
-                 .replace(";", "\;")
-                 .replace(",", "\\,")
-                 .replace("\n", "\\n"))
-
-
-def ics_fold(line: str) -> str:
-    """Строка не должна быть длиннее 75 октетов. Режем именно по байтам:
-    кириллица занимает два, и наивная резка по символам порвала бы букву."""
-    raw = line.encode("utf-8")
-    if len(raw) <= 75:
-        return line
-    out, chunk = [], b""
-    for ch in line:
-        b = ch.encode("utf-8")
-        # первая строка 75 октетов, продолжения — 74 плюс ведущий пробел
-        limit = 75 if not out else 74
-        if len(chunk) + len(b) > limit:
-            out.append(chunk.decode("utf-8"))
-            chunk = b""
-        chunk += b
-    out.append(chunk.decode("utf-8"))
-    return "\r\n ".join(out)
-
-
-@app.get("/api/calendar.ics")
-def calendar_ics():
-    """Событие для календаря гостя. Отдаём из приложения, а не файлом со
-    статикой: так гарантирован правильный Content-Type, без него телефон
-    предложит скачать файл вместо добавления события."""
-    fmt = "%Y%m%dT%H%M%SZ"
-    start = EVENT_AT.astimezone(timezone.utc)
-    lines = [
-        "BEGIN:VCALENDAR",
-        "VERSION:2.0",
-        "PRODID:-//Str//Invitation//RU",
-        "CALSCALE:GREGORIAN",
-        "METHOD:PUBLISH",
-        "BEGIN:VEVENT",
-        f"UID:birthday-2026-08-22@{SITE_URL.split('//')[-1]}",
-        f"DTSTAMP:{datetime.now(timezone.utc).strftime(fmt)}",
-        f"DTSTART:{start.strftime(fmt)}",
-        f"DTEND:{(start + EVENT_DURATION).strftime(fmt)}",
-        f"SUMMARY:{ics_escape(EVENT_TITLE)}",
-        f"LOCATION:{ics_escape(EVENT_LOCATION)}",
-        f"DESCRIPTION:{ics_escape('Дресс-код: нарядно плюс один геройский акцент. Подробности и список гостей: ' + SITE_URL)}",
-        f"URL:{SITE_URL}",
-        "STATUS:CONFIRMED",
-        "BEGIN:VALARM",
-        "TRIGGER:-P2D",
-        "ACTION:DISPLAY",
-        f"DESCRIPTION:{ics_escape('Послезавтра день рождения Александра')}",
-        "END:VALARM",
-        "END:VEVENT",
-        "END:VCALENDAR",
-    ]
-    body = "\r\n".join(ics_fold(x) for x in lines) + "\r\n"
-    return Response(
-        content=body.encode("utf-8"),
-        media_type="text/calendar; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="birthday.ics"'},
-    )
+# Календарь отдаётся статикой из site/calendar.ics, а не отсюда: это самый
+# устойчивый канал напоминания, и он не должен падать вместе с бэкендом.
+# Генератор — scripts/make_ics.py, Content-Type принудительно задан в Caddy.
 
 
 @app.get("/api/admin/allergies")

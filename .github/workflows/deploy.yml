@@ -303,8 +303,41 @@ jobs:
             # В юните лежит пароль админки, поэтому он не для всех.
             chmod 600 /etc/systemd/system/str-api.service
 
+            echo "=== таймер бэкапов ==="
+            cat > /etc/systemd/system/str-backup.service <<UNIT
+            [Unit]
+            Description=Str guest database backup
+
+            [Service]
+            Type=oneshot
+            User=strapi
+            Group=strapi
+            Environment="STR_DATA_DIR=/opt/str-api/data"
+            Environment="STR_BACKUP_DIR=/opt/str-api/backups"
+            ExecStart=/opt/str-api/venv/bin/python /opt/str-api/src/backup.py
+            UNIT
+            cat > /etc/systemd/system/str-backup.timer <<UNIT
+            [Unit]
+            Description=Daily backup of the guest database
+
+            [Timer]
+            OnCalendar=*-*-* 03:30:00
+            Persistent=true
+
+            [Install]
+            WantedBy=timers.target
+            UNIT
+            sed -i 's/^[[:space:]]*//' /etc/systemd/system/str-backup.service \
+                                        /etc/systemd/system/str-backup.timer
+            mkdir -p /opt/str-api/backups
+
             chown -R strapi:strapi /opt/str-api
             systemctl daemon-reload
+            systemctl enable --now str-backup.timer >/dev/null 2>&1 || true
+            # Первый снимок делаем сразу: ждать 03:30, чтобы узнать, что
+            # бэкап вообще не работает, — плохая идея.
+            systemctl start str-backup.service || true
+            ls -la /opt/str-api/backups | tail -3
             systemctl enable str-api >/dev/null 2>&1 || true
             systemctl restart str-api
 
@@ -342,6 +375,10 @@ jobs:
             site_block() {
               printf '%s {\n' "$1"
               printf '\tencode gzip\n'
+              # Тип задаём явно: без него телефон предложит скачать файл
+              # вместо добавления события, а полагаться на mime.types сервера
+              # не хочется.
+              printf '\thandle /calendar.ics {\n\t\theader Content-Type "text/calendar; charset=utf-8"\n\t\troot * /var/www/html\n\t\tfile_server\n\t}\n'
               printf '\thandle /admin* {\n\t\treverse_proxy 127.0.0.1:8000\n\t}\n'
               printf '\thandle /api/* {\n\t\treverse_proxy 127.0.0.1:8000\n\t}\n'
               printf '\thandle {\n\t\troot * /var/www/html\n\t\tfile_server\n\t}\n'

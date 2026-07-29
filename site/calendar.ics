@@ -1,0 +1,25 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Str//Invitation//RU
+CALSCALE:GREGORIAN
+METHOD:PUBLISH
+BEGIN:VEVENT
+UID:birthday-2026-08-22@raikhin.duckdns.org
+DTSTAMP:20260822T130000Z
+DTSTART:20260822T130000Z
+DTEND:20260822T190000Z
+SUMMARY:Александру 37 — Матч всех звёзд
+LOCATION:Лофт в Сити\, Москва
+DESCRIPTION:Дресс-код: нарядно плюс один герой
+ ский акцент. Подробности и список гостей
+ : https://raikhin.duckdns.org
+URL:https://raikhin.duckdns.org
+STATUS:CONFIRMED
+BEGIN:VALARM
+TRIGGER:-P2D
+ACTION:DISPLAY
+DESCRIPTION:Послезавтра день рождения Алексан
+ дра
+END:VALARM
+END:VEVENT
+END:VCALENDAR

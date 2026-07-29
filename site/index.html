@@ -718,7 +718,7 @@
       </div>
     </div>
 
-    <a class="cal-btn" href="/api/calendar.ics">📅 Добавить в календарь</a>
+    <a class="cal-btn" href="/calendar.ics">📅 Добавить в календарь</a>
     <div class="cal-hint">Телефон сам напомнит за два дня — это работает,
       даже если Telegram у вас отключён.</div>
   </div>
@@ -781,6 +781,13 @@
     </div>
 
     <div class="rsvp-card">
+      <div class="notice" id="offline-msg" style="display:none">
+        <b>Запись временно недоступна</b>
+        Не отвечает сервер записи. Само приглашение работает: дата, место и
+        дресс-код ниже. Попробуйте обновить страницу через несколько минут —
+        или напишите имениннику напрямую.
+      </div>
+
       <div class="notice" id="already-msg" style="display:none">
         <b>Вы уже в составе</b>
         Форма заполнена вашими ответами — можно поменять что угодно и сохранить заново.
@@ -952,6 +959,7 @@
   const message = document.getElementById('message');
   const website = document.getElementById('website');
   const bringsOwn = document.getElementById('brings-own');
+  const offlineMsg = document.getElementById('offline-msg');
 
   const KNOWN_DRINKS = ['Виски', 'Вино', 'Пиво', 'Коктейль', 'Безалкогольное'];
 
@@ -1019,6 +1027,21 @@
     ));
   }
 
+  // Доступность бэкенда проверяем сразу, а не по факту неудачной отправки:
+  // иначе гость заполнит всю форму и только потом узнает, что не сохранилось.
+  async function checkBackend() {
+    try {
+      const res = await fetch('/api/health', { cache: 'no-store' });
+      if (!res.ok) throw new Error('bad status');
+      return true;
+    } catch (e) {
+      offlineMsg.style.display = 'block';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Запись недоступна';
+      return false;
+    }
+  }
+
   async function loadRoster() {
     try {
       const res = await fetch('/api/roster');
@@ -1044,6 +1067,7 @@
       rosterCount.textContent = '';
     }
   }
+  checkBackend();
   loadRoster();
 
   function showError(text) {
