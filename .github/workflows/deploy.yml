@@ -1,0 +1,115 @@
+name: Deploy to server
+
+# Деплой пустого веб-приложения на сервер по SSH силами раннеров GitHub.
+# Самодостаточно: для запуска нужен только этот файл + секреты (файлы приложения
+# workflow создаёт на сервере сам и поднимает контейнер nginx).
+#
+# Секреты репозитория (Settings → Secrets and variables → Actions → New repository secret):
+#   SERVER_HOST      — IP/домен сервера (например 91.212.150.225)   [обязательно]
+#   SERVER_PASSWORD  — пароль SSH                                    [обязательно]
+#   SERVER_USER      — пользователь SSH (по умолчанию root)          [опционально]
+#   SERVER_PORT      — порт SSH (по умолчанию 22)                    [опционально]
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Что сделать на сервере"
+        type: choice
+        options: [inspect, deploy]
+        default: inspect
+      publish_port:
+        description: "Порт на сервере под приложение (если 80 занят — укажи другой, напр. 8080)"
+        default: "80"
+
+concurrency:
+  group: deploy-server
+  cancel-in-progress: false
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      # ── INSPECT: только осмотреть сервер, ничего не менять ────────────────────
+      - name: Inspect server
+        if: ${{ inputs.action == 'inspect' }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER || 'root' }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          script: |
+            echo "=== OS ==="; (cat /etc/os-release | head -2) 2>&1 || true
+            echo "=== whoami ==="; whoami
+            echo "=== docker ==="; (docker --version && docker compose version) 2>&1 || echo "docker: NOT installed"
+            echo "=== listening 80/443/8080 ==="; (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -E ':80 |:443 |:8080 ' || echo "nothing on 80/443/8080"
+            echo "=== nginx ==="; (nginx -v 2>&1; systemctl is-active nginx 2>/dev/null) || echo "nginx: NOT installed"
+            echo "=== containers ==="; docker ps 2>&1 || true
+            echo "=== who answers :80 ==="; (curl -sS -I http://127.0.0.1/ 2>&1 | head -8) || true
+            echo "=== disk ==="; df -h / | tail -1
+
+      # ── DEPLOY: создать страницу на сервере и поднять контейнер nginx ─────────
+      - name: Deploy on server
+        if: ${{ inputs.action == 'deploy' }}
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER || 'root' }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          envs: PUBLISH_PORT
+          script: |
+            set -e
+            export PUBLISH_PORT="${PUBLISH_PORT:-80}"
+            echo "Публикуем на порт: $PUBLISH_PORT"
+            mkdir -p /opt/str/public
+            cat > /opt/str/public/index.html <<'HTML'
+            <!doctype html>
+            <html lang="ru">
+            <head>
+              <meta charset="utf-8" />
+              <meta name="viewport" content="width=device-width, initial-scale=1" />
+              <meta name="robots" content="noindex" />
+              <title>Str — приложение готовится</title>
+              <style>
+                html,body{height:100%;margin:0}
+                body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+                  background:radial-gradient(1200px 600px at 50% -10%,#1b2030 0%,#0f1117 60%);
+                  color:#e7eaf0;display:flex;align-items:center;justify-content:center;padding:24px}
+                .card{max-width:560px;background:#171a23;border:1px solid #262b38;border-radius:16px;
+                  padding:40px 36px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
+                .badge{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#9aa3b2;
+                  border:1px solid #262b38;border-radius:999px;padding:6px 12px;margin-bottom:20px}
+                .dot{width:8px;height:8px;border-radius:50%;background:#35d07f;
+                  box-shadow:0 0 0 3px rgba(53,208,127,.15)}
+                h1{font-size:28px;margin:0 0 10px}
+                p{color:#9aa3b2;line-height:1.6;margin:0 0 8px}
+                code{background:#0d0f16;border:1px solid #262b38;border-radius:6px;padding:2px 6px;font-size:12px}
+              </style>
+            </head>
+            <body>
+              <main class="card">
+                <span class="badge"><span class="dot"></span> Сервис запущен</span>
+                <h1>Str</h1>
+                <p>Пустое веб-приложение развёрнуто и работает. Это стартовая заглушка — реальный функционал появится здесь по мере разработки.</p>
+                <p>Проверка доступности: <code>/healthz</code> → <code>ok</code>.</p>
+              </main>
+            </body>
+            </html>
+            HTML
+            printf 'ok\n' > /opt/str/public/healthz
+            if ! command -v docker >/dev/null 2>&1; then
+              echo "Docker не найден — устанавливаю..."
+              curl -fsSL https://get.docker.com | sh
+            fi
+            docker rm -f str-web 2>/dev/null || true
+            docker run -d --name str-web --restart unless-stopped \
+              -p "${PUBLISH_PORT}:80" \
+              -v /opt/str/public:/usr/share/nginx/html:ro \
+              nginx:alpine
+            sleep 2
+            echo "=== health check ==="
+            curl -sS -i "http://127.0.0.1:${PUBLISH_PORT}/healthz" | head -5 || true
+        env:
+          PUBLISH_PORT: ${{ github.event.inputs.publish_port || '80' }}
