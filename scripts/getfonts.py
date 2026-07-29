@@ -52,7 +52,7 @@ for fam, axis in FAMILIES:
         with open(os.path.join(OUT, name), "wb") as fh:
             fh.write(fetch(src))
 
-        local = block.replace(src, f"fonts/{name}")
+        local = block.replace(src, name)  # fonts.css лежит внутри fonts/, путь относительный
         local = re.sub(r"\s+", " ", local).strip()
         css_parts.append(f"/* {family} {weight} {subset} */\n{local}")
         print(f"  {name}")
