@@ -1,14 +1,23 @@
 name: Deploy to server
 
 # Деплой статического сайта из каталога site/ на сервер по SSH силами раннеров GitHub.
-# Ставит nginx через apt и отдаёт содержимое site/ на порту 80.
-# Docker не используется (тянуть образы с Docker Hub на этом сервере нестабильно).
+# Caddy ставится через apt и отдаёт содержимое site/ по HTTPS с автоматическим
+# сертификатом Let's Encrypt. Docker не используется (тянуть образы с Docker Hub
+# на этом сервере нестабильно).
 #
 # Секреты репозитория (Settings → Secrets and variables → Actions):
-#   SERVER_HOST      — IP/домен сервера (например 91.212.150.225)   [обязательно]
-#   SERVER_PASSWORD  — пароль SSH                                    [обязательно]
-#   SERVER_USER      — пользователь SSH (по умолчанию root)          [опционально]
-#   SERVER_PORT      — порт SSH (по умолчанию 22)                    [опционально]
+#   SERVER_HOST        — IP/домен сервера (например 91.212.150.225)  [обязательно]
+#   SERVER_PASSWORD    — пароль SSH                                   [обязательно]
+#   SERVER_USER        — пользователь SSH (по умолчанию root)         [опционально]
+#   SERVER_PORT        — порт SSH (по умолчанию 22)                   [опционально]
+#   DUCKDNS_SUBDOMAIN  — метка на duckdns.org БЕЗ суффикса, например  [обязательно
+#                        "str-app" для str-app.duckdns.org             для HTTPS]
+#   DUCKDNS_TOKEN      — токен с дашборда duckdns.org                 [обязательно
+#                                                                      для HTTPS]
+#   ACME_EMAIL         — почта для уведомлений Let's Encrypt          [опционально]
+#
+# Пока DUCKDNS_SUBDOMAIN/DUCKDNS_TOKEN не заданы, сайт продолжает отдаваться
+# по HTTP на голом IP — деплой не падает, шаги с DNS и TLS пропускаются.
 
 on:
   push:
@@ -33,12 +42,36 @@ jobs:
   deploy:
     if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
     runs-on: ubuntu-latest
+    # Контекст secrets недоступен в step-level if, поэтому раскрываем его здесь.
+    env:
+      SITE_DOMAIN: ${{ secrets.DUCKDNS_SUBDOMAIN != '' && format('{0}.duckdns.org', secrets.DUCKDNS_SUBDOMAIN) || '' }}
+      SERVER_ADDR: ${{ secrets.SERVER_HOST }}
+      ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+      DUCKDNS_READY: ${{ secrets.DUCKDNS_SUBDOMAIN != '' && secrets.DUCKDNS_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Pack site
         run: |
           echo "SITE_B64=$(tar -czf - -C site . | base64 -w0)" >> "$GITHUB_ENV"
+
+      # DuckDNS не имеет API для регистрации поддомена — его заводят руками через
+      # веб-интерфейс. Здесь только привязка уже существующего поддомена к IP.
+      - name: Point DuckDNS at the server
+        if: ${{ env.DUCKDNS_READY == 'true' }}
+        env:
+          SUB: ${{ secrets.DUCKDNS_SUBDOMAIN }}
+          TOKEN: ${{ secrets.DUCKDNS_TOKEN }}
+          IP: ${{ secrets.SERVER_HOST }}
+        run: |
+          set -e
+          resp=$(curl -sS --get "https://www.duckdns.org/update" \
+                   --data-urlencode "domains=$SUB" \
+                   --data-urlencode "token=$TOKEN" \
+                   --data-urlencode "ip=$IP")
+          echo "duckdns: $resp"
+          # API отвечает голым "OK" или "KO" — KO означает неверный токен/поддомен
+          [ "$resp" = "OK" ] || { echo "::error::DuckDNS вернул '$resp' — проверьте DUCKDNS_SUBDOMAIN и DUCKDNS_TOKEN"; exit 1; }
 
       - name: Deploy on server
         uses: appleboy/ssh-action@v1.2.0
@@ -47,31 +80,92 @@ jobs:
           username: ${{ secrets.SERVER_USER || 'root' }}
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT || 22 }}
-          command_timeout: 5m
-          envs: SITE_B64,GITHUB_SHA
+          command_timeout: 10m
+          envs: SITE_B64,GITHUB_SHA,SITE_DOMAIN,SERVER_ADDR,ACME_EMAIL
           script: |
             set -e
             export DEBIAN_FRONTEND=noninteractive
-            echo "=== nginx + rsync через apt ==="
-            apt-get update -qq
-            apt-get install -y -qq nginx rsync
+
+            echo "=== ставим Caddy ==="
+            if ! command -v caddy >/dev/null 2>&1; then
+              apt-get update -qq
+              apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https curl gnupg rsync
+              curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
+                | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+              curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' \
+                > /etc/apt/sources.list.d/caddy-stable.list
+              apt-get update -qq
+              apt-get install -y -qq caddy
+            else
+              apt-get install -y -qq rsync >/dev/null
+            fi
+            caddy version
+
+            echo "=== освобождаем порты 80/443 от nginx ==="
+            systemctl disable --now nginx >/dev/null 2>&1 || true
+
+            echo "=== открываем порты, если включён ufw ==="
+            if command -v ufw >/dev/null 2>&1 && ufw status | grep -q '^Status: active'; then
+              ufw allow 80/tcp  >/dev/null 2>&1 || true
+              ufw allow 443/tcp >/dev/null 2>&1 || true
+            fi
+
             echo "=== распаковываем сайт ==="
             rm -rf /tmp/str-site
             mkdir -p /tmp/str-site /var/www/html
             echo "$SITE_B64" | base64 -d | tar -xzf - -C /tmp/str-site
             printf '%s\n' "$GITHUB_SHA" > /tmp/str-site/version
             rsync -a --delete /tmp/str-site/ /var/www/html/
-            chmod -R a+r /var/www/html
-            echo "=== запускаем nginx ==="
-            systemctl enable nginx >/dev/null 2>&1 || true
-            systemctl restart nginx
-            sleep 1
-            echo "=== health check ==="
+            chmod -R a+rX /var/www/html
+
+            echo "=== пишем Caddyfile ==="
+            if [ -n "$SITE_DOMAIN" ]; then
+              # Домен задан → Caddy сам выпустит сертификат Let's Encrypt
+              # и включит редирект с HTTP на HTTPS.
+              # Адрес сервера прописывается явно, а не как ':80' — блок без
+              # host-матчера затенил бы автоматический редирект HTTP → HTTPS.
+              {
+                if [ -n "$ACME_EMAIL" ]; then printf '{\n\temail %s\n}\n\n' "$ACME_EMAIL"; fi
+                printf '%s {\n\troot * /var/www/html\n\tfile_server\n\tencode gzip\n}\n\n' "$SITE_DOMAIN"
+                # Редирект прописан явно: наличие блока http://<IP> на :80 отключает
+                # автогенерацию редиректа для домена.
+                printf 'http://%s {\n\tredir https://%s{uri} permanent\n}\n\n' "$SITE_DOMAIN" "$SITE_DOMAIN"
+                printf 'http://%s {\n\troot * /var/www/html\n\tfile_server\n\tencode gzip\n}\n' "$SERVER_ADDR"
+              } > /etc/caddy/Caddyfile
+            else
+              printf ':80 {\n\troot * /var/www/html\n\tfile_server\n\tencode gzip\n}\n' > /etc/caddy/Caddyfile
+            fi
+            caddy fmt --overwrite /etc/caddy/Caddyfile || true
+            caddy validate --config /etc/caddy/Caddyfile
+
+            echo "=== запускаем Caddy ==="
+            systemctl enable caddy >/dev/null 2>&1 || true
+            systemctl restart caddy
+            sleep 2
+
+            echo "=== health check по HTTP ==="
             curl -fsS -o /dev/null http://127.0.0.1/ && echo "index: OK"
             echo "healthz: $(curl -fsS http://127.0.0.1/healthz)"
             echo "version: $(curl -fsS http://127.0.0.1/version)"
-            echo "=== nginx status ==="
-            systemctl is-active nginx
+
+            if [ -n "$SITE_DOMAIN" ]; then
+              echo "=== ждём сертификат для $SITE_DOMAIN ==="
+              ok=""
+              for i in $(seq 1 20); do
+                if curl -fsS -o /dev/null --max-time 10 "https://$SITE_DOMAIN/healthz"; then
+                  ok=1; echo "TLS: сертификат выпущен, HTTPS отвечает"; break
+                fi
+                sleep 15
+              done
+              if [ -z "$ok" ]; then
+                echo "::error::HTTPS не поднялся за 5 минут — логи: journalctl -u caddy"
+                journalctl -u caddy --no-pager -n 40 || true
+                exit 1
+              fi
+            fi
+
+            echo "=== статус Caddy ==="
+            systemctl is-active caddy
 
   # ── INSPECT: только осмотреть сервер, ничего не менять ──────────────────────
   inspect:
@@ -90,7 +184,10 @@ jobs:
             echo "=== OS ==="; (cat /etc/os-release | head -2) 2>&1 || true
             echo "=== whoami ==="; whoami
             echo "=== listening 80/443 ==="; (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -E ':80 |:443 ' || echo "nothing on 80/443"
-            echo "=== nginx ==="; (nginx -v 2>&1; systemctl is-active nginx 2>/dev/null) || echo "nginx: NOT installed"
+            echo "=== caddy ==="; (caddy version 2>&1; systemctl is-active caddy 2>/dev/null) || echo "caddy: NOT installed"
+            echo "=== nginx ==="; (systemctl is-active nginx 2>/dev/null) || echo "nginx: не запущен"
+            echo "=== Caddyfile ==="; (cat /etc/caddy/Caddyfile 2>/dev/null) || echo "нет Caddyfile"
+            echo "=== сертификаты ==="; (find /var/lib/caddy -name '*.crt' 2>/dev/null | head) || echo "нет сертификатов"
             echo "=== who answers :80 ==="; (curl -sS -i http://127.0.0.1/ 2>&1 | head -8) || true
             echo "=== version ==="; (cat /var/www/html/version 2>/dev/null) || echo "no version file"
             echo "=== disk ==="; df -h / | tail -1
