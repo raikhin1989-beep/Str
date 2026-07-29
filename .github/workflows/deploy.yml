@@ -10,10 +10,8 @@ name: Deploy to server
 #   SERVER_PASSWORD    — пароль SSH                                   [обязательно]
 #   SERVER_USER        — пользователь SSH (по умолчанию root)         [опционально]
 #   SERVER_PORT        — порт SSH (по умолчанию 22)                   [опционально]
-#   DUCKDNS_SUBDOMAIN  — метка на duckdns.org БЕЗ суффикса, например  [только для
-#                        "str-app" для str-app.duckdns.org             TLS_MODE=duckdns]
-#   DUCKDNS_TOKEN      — токен с дашборда duckdns.org                 [только для
-#                                                                      TLS_MODE=duckdns]
+#   DUCKDNS_SUBDOMAIN  — метка на duckdns.org БЕЗ суффикса            [опционально,
+#   DUCKDNS_TOKEN      — токен с дашборда duckdns.org                  для авто-DNS]
 #   ACME_EMAIL         — почта для уведомлений Let's Encrypt          [опционально]
 
 on:
@@ -39,7 +37,6 @@ env:
   #   fixed   — домен берётся из SITE_DOMAIN_FIXED ниже. A-запись должна вести
   #             на сервер; секреты не нужны. Это текущий режим.
   #   sslip   — домен выводится из IP сервера (91.212.150.225 → 91-212-150-225.sslip.io).
-  #             Регистрация и аккаунт не нужны, Let's Encrypt выдаёт обычный сертификат.
   #   duckdns — используется <DUCKDNS_SUBDOMAIN>.duckdns.org из секретов.
   #   off     — без TLS, сайт отдаётся только по HTTP на порту 80.
   TLS_MODE: fixed
@@ -52,15 +49,13 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SERVER_ADDR: ${{ secrets.SERVER_HOST }}
+      SERVER_LOGIN: ${{ secrets.SERVER_USER || 'root' }}
+      SERVER_SSH_PORT: ${{ secrets.SERVER_PORT || 22 }}
       ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
       # Контекст secrets недоступен в step-level if, поэтому раскрываем его здесь.
       HAS_DUCKDNS: ${{ secrets.DUCKDNS_SUBDOMAIN != '' && secrets.DUCKDNS_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Pack site
-        run: |
-          echo "SITE_B64=$(tar -czf - -C site . | base64 -w0)" >> "$GITHUB_ENV"
 
       # SITE_DOMAIN вычисляется здесь, а не в env job'а: в режиме sslip домен
       # выводится из секрета SERVER_HOST, а для этого нужен шелл.
@@ -119,7 +114,9 @@ jobs:
           # API отвечает голым "OK" или "KO" — KO означает неверный токен/поддомен
           [ "$resp" = "OK" ] || { echo "::error::DuckDNS вернул '$resp' — проверьте DUCKDNS_SUBDOMAIN и DUCKDNS_TOKEN"; exit 1; }
 
-      - name: Deploy on server
+      # Пакеты ставятся отдельным шагом до заливки файлов: rsync нужен на
+      # сервере раньше, чем мы попробуем в него синхронизировать сайт.
+      - name: Prepare server
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -127,7 +124,6 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT || 22 }}
           command_timeout: 10m
-          envs: SITE_B64,GITHUB_SHA,SITE_DOMAIN,SERVER_ADDR,ACME_EMAIL
           script: |
             set -e
             export DEBIAN_FRONTEND=noninteractive
@@ -143,7 +139,7 @@ jobs:
               apt-get update -qq
               apt-get install -y -qq caddy
             else
-              apt-get install -y -qq rsync >/dev/null
+              command -v rsync >/dev/null 2>&1 || apt-get install -y -qq rsync
             fi
             caddy version
 
@@ -156,12 +152,36 @@ jobs:
               ufw allow 443/tcp >/dev/null 2>&1 || true
             fi
 
-            echo "=== распаковываем сайт ==="
-            rm -rf /tmp/str-site
-            mkdir -p /tmp/str-site /var/www/html
-            echo "$SITE_B64" | base64 -d | tar -xzf - -C /tmp/str-site
-            printf '%s\n' "$GITHUB_SHA" > /tmp/str-site/version
-            rsync -a --delete /tmp/str-site/ /var/www/html/
+            mkdir -p /var/www/html
+
+      # Файлы едут rsync'ом, а не через переменную окружения: в site/ лежат
+      # шрифты, и base64-упаковка каталога перестала помещаться в окружение
+      # ssh-action (~450 КБ против ~1,5 КБ, когда там был один HTML).
+      - name: Upload site
+        env:
+          SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+        run: |
+          set -e
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sshpass
+          # sshpass -e берёт пароль из окружения, а не из аргументов,
+          # чтобы он не светился в списке процессов раннера.
+          sshpass -e rsync -az --delete --stats \
+            -e "ssh -p $SERVER_SSH_PORT -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
+            site/ "$SERVER_LOGIN@$SERVER_ADDR:/var/www/html/"
+
+      - name: Configure Caddy and verify
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER || 'root' }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          command_timeout: 10m
+          envs: GITHUB_SHA,SITE_DOMAIN,SERVER_ADDR,ACME_EMAIL
+          script: |
+            set -e
+            printf '%s\n' "$GITHUB_SHA" > /var/www/html/version
             chmod -R a+rX /var/www/html
 
             echo "=== пишем Caddyfile ==="
@@ -244,6 +264,6 @@ jobs:
             echo "=== nginx ==="; (systemctl is-active nginx 2>/dev/null) || echo "nginx: не запущен"
             echo "=== Caddyfile ==="; (cat /etc/caddy/Caddyfile 2>/dev/null) || echo "нет Caddyfile"
             echo "=== сертификаты ==="; (find /var/lib/caddy -name '*.crt' 2>/dev/null | head) || echo "нет сертификатов"
-            echo "=== who answers :80 ==="; (curl -sS -i http://127.0.0.1/ 2>&1 | head -8) || true
+            echo "=== содержимое сайта ==="; (ls -la /var/www/html | head -20) || true
             echo "=== version ==="; (cat /var/www/html/version 2>/dev/null) || echo "no version file"
             echo "=== disk ==="; df -h / | tail -1
