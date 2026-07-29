@@ -59,6 +59,10 @@
   .norms summary { cursor: pointer; }
   .norms div { padding: 10px 0 0 4px; line-height: 1.7; }
   .custom { color: var(--gold); }
+  .tg { background: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 8px; font-size: 13px; line-height: 1.7; }
+  .tg a { color: var(--gold); }
+  .tg .bad { color: #ff9a9a; }
+  .tg .good { color: var(--gold); }
   .err { background: rgba(211,17,69,0.2); border: 1px solid var(--red); border-radius: 10px; padding: 14px; margin-bottom: 18px; display: none; }
 </style>
 </head>
@@ -75,6 +79,9 @@
     <a class="btn" href="/api/admin/guests.csv">Скачать CSV</a>
     <button class="btn ghost" id="reload">Обновить</button>
   </div>
+
+  <h2 class="h2">Telegram</h2>
+  <div class="tg" id="tg"></div>
 
   <h2 class="h2">Закупка бара</h2>
   <div class="bar-note" id="bar-note"></div>
@@ -123,6 +130,42 @@
     if (!iso) return '';
     const d = new Date(iso);
     return isNaN(d) ? iso : d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+
+  async function loadTelegram() {
+    const el = document.getElementById('tg');
+    let d;
+    try {
+      const res = await fetch('/api/admin/telegram');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      d = await res.json();
+    } catch (e) { el.innerHTML = '<span class="bad">Не удалось опросить бота: ' + esc(e.message) + '</span>'; return; }
+
+    if (!d.configured) {
+      el.innerHTML = '<span class="bad">Секрет TELEGRAM_BOT_TOKEN не задан — бот не работает.</span>';
+      return;
+    }
+    if (!d.ok) {
+      el.innerHTML = '<span class="bad">Telegram отклонил токен: ' + esc(d.error || '') + '</span>';
+      return;
+    }
+    let h = `Бот: <b>@${esc(d.bot)}</b> · подключились гостей: ${esc(d.guests_linked)} из ${esc(d.guests_total)}<br>`;
+    if (d.host_linked) {
+      h += '<span class="good">✓ ваш чат привязан</span> · <button class="btn ghost" id="tg-test" style="margin-left:8px">Тестовое сообщение</button>';
+    } else {
+      h += `Ваш чат не привязан. Откройте ссылку и нажмите «Старт»: <a href="${esc(d.host_link)}" target="_blank" rel="noopener">${esc(d.host_link)}</a><br>`;
+      h += '<span class="muted">Ссылка одноразовая: после привязки перестанет работать.</span>';
+    }
+    el.innerHTML = h;
+
+    const btn = document.getElementById('tg-test');
+    if (btn) btn.addEventListener('click', async () => {
+      btn.disabled = true; btn.textContent = 'Отправляю...';
+      const res = await fetch('/api/admin/telegram/test', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      btn.textContent = res.ok ? 'Отправлено ✓' : 'Ошибка: ' + (body.detail || res.status);
+      btn.disabled = false;
+    });
   }
 
   async function loadBar() {
@@ -218,7 +261,7 @@
     }
   });
 
-  function loadAll() { load(); loadBar(); }
+  function loadAll() { load(); loadBar(); loadTelegram(); }
   document.getElementById('reload').addEventListener('click', loadAll);
   loadAll();
 </script>

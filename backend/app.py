@@ -9,11 +9,15 @@ GET /api/roster — список для всех, с сокращёнными и
 """
 import csv
 import io
+import json
 import os
 import secrets as pysecrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+import urllib.error
+import urllib.parse
+import urllib.request
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -208,6 +212,8 @@ def _row_to_own(row) -> dict:
         "allergies": row["allergies"],
         "message": row["message"],
         "brings_own": bool(row["brings_own"]),
+        "link_code": row["link_code"],
+        "tg_linked": bool(row["tg_chat_id"]),
     }
 
 
@@ -217,6 +223,15 @@ def get_own(token: str = ""):
         return JSONResponse(status_code=400, content={"error": "Не передан токен."})
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM guests WHERE token = ?", (token,)).fetchone()
+        if row is not None and not row["link_code"]:
+            # Заявки, созданные до появления бота, кода не имеют — выдаём его
+            # при первом обращении, а не миграцией: так не нужно придумывать
+            # уникальные значения пачкой в SQL.
+            code = db.new_link_code()
+            conn.execute("UPDATE guests SET link_code = ? WHERE id = ?",
+                         (code, row["id"]))
+            row = conn.execute("SELECT * FROM guests WHERE token = ?",
+                               (token,)).fetchone()
     if row is None:
         # Токен из localStorage мог остаться от сброшенной базы — не 500,
         # а честное «такой записи нет», страница просто покажет пустую форму.
@@ -273,11 +288,20 @@ def submit(data: RsvpIn, request: Request):
         token = db.new_token()
         conn.execute(
             "INSERT INTO guests(token, name, guests_count, drink, hype,"
-            " allergies, message, brings_own, ip_hash, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            " allergies, message, brings_own, link_code, ip_hash,"
+            " created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (token, data.name, data.guests_count, data.drink, data.hype,
-             data.allergies, data.message, int(data.brings_own), ip, ts, ts),
+             data.allergies, data.message, int(data.brings_own),
+             db.new_link_code(), ip, ts, ts),
         )
+
+    # Уведомление имениннику. После коммита и вне транзакции: сеть может
+    # тормозить, а заявка к этому моменту уже надёжно сохранена.
+    notify_host(f"🏀 Новая заявка: <b>{data.name}</b>, гостей: "
+                f"{data.guests_count}, напиток: {data.drink}"
+                + (f"\nАллергии: {data.allergies}" if data.allergies else "")
+                + (f"\nСообщение: {data.message}" if data.message else ""))
     return {"ok": True, "token": token, "updated": False}
 
 
@@ -477,3 +501,175 @@ def admin_bar(_: None = Depends(admin_auth)):
             for d, n in BAR_NORMS.items()
         ],
     }
+
+
+# ── TELEGRAM ────────────────────────────────────────────────────────────────
+# Бот нужен для двух вещей: напомнить гостю за два дня (шаг 8) и сообщить
+# имениннику о новой заявке. Работаем через вебхук, а не поллинг: HTTPS с
+# валидным сертификатом уже есть, и лишний вечно живущий процесс не нужен.
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TG_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+WEBHOOK_SECRET_PATH = Path(os.environ.get("STR_DATA_DIR", "/opt/str-api/data")) / "tg_webhook_secret"
+SITE_URL = os.environ.get("SITE_URL", "https://raikhin.duckdns.org")
+
+
+def tg_call(method: str, **params) -> dict:
+    """Вызов Bot API на stdlib: ради двух методов тянуть http-клиент незачем.
+    Ошибки не пробрасываем — упавшее уведомление не должно ронять заявку."""
+    if not TELEGRAM_TOKEN:
+        return {"ok": False, "description": "TELEGRAM_BOT_TOKEN не задан"}
+    data = urllib.parse.urlencode(
+        {k: v for k, v in params.items() if v is not None}).encode()
+    try:
+        with urllib.request.urlopen(f"{TG_API}/{method}", data=data, timeout=15) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read())
+        except Exception:
+            return {"ok": False, "description": f"HTTP {e.code}"}
+    except Exception as e:
+        return {"ok": False, "description": str(e)}
+
+
+def tg_send(chat_id: str, text: str) -> dict:
+    return tg_call("sendMessage", chat_id=chat_id, text=text,
+                   parse_mode="HTML", disable_web_page_preview="true")
+
+
+def bot_username() -> str:
+    """Имя бота нужно для диплинков. Кэшируем в памяти процесса — оно не
+    меняется, а дёргать getMe на каждый запрос страницы незачем."""
+    global _BOT_USERNAME
+    if _BOT_USERNAME is None:
+        r = tg_call("getMe")
+        _BOT_USERNAME = r.get("result", {}).get("username", "") if r.get("ok") else ""
+    return _BOT_USERNAME
+
+
+_BOT_USERNAME: str | None = None
+
+
+def notify_host(text: str) -> None:
+    """Сообщение имениннику, если он привязал свой чат."""
+    with db.get_conn() as conn:
+        chat = db.get_setting(conn, "host_chat_id")
+    if chat:
+        tg_send(chat, text)
+
+
+@app.get("/api/telegram")
+def telegram_public():
+    """Публично отдаём только имя бота — оно и так видно всем в Telegram.
+    Нужно странице, чтобы собрать ссылку «Подключить Telegram»."""
+    return {"bot": bot_username()}
+
+
+@app.post("/api/tg/webhook")
+async def tg_webhook(request: Request):
+    """Точка приёма обновлений. Путь публичный — его зовёт Telegram, — но
+    закрыт секретным заголовком, который знают только Telegram и сервер."""
+    expected = WEBHOOK_SECRET_PATH.read_text().strip() if WEBHOOK_SECRET_PATH.exists() else ""
+    got = request.headers.get("x-telegram-bot-api-secret-token", "")
+    if not expected or not pysecrets.compare_digest(got, expected):
+        raise HTTPException(status_code=403, detail="forbidden")
+
+    update = await request.json()
+    msg = update.get("message") or {}
+    text = (msg.get("text") or "").strip()
+    chat = msg.get("chat") or {}
+    chat_id = str(chat.get("id", ""))
+    username = chat.get("username") or ""
+    if not chat_id:
+        return {"ok": True}
+
+    if text.startswith("/start"):
+        parts = text.split(maxsplit=1)
+        code = parts[1].strip() if len(parts) > 1 else ""
+        _handle_start(chat_id, username, code)
+    elif text.startswith("/stop"):
+        with db.get_conn() as conn:
+            conn.execute(
+                "UPDATE guests SET tg_chat_id = NULL WHERE tg_chat_id = ?", (chat_id,))
+        tg_send(chat_id, "Отключил уведомления. Вернуться можно по той же кнопке "
+                         "на странице приглашения.")
+    else:
+        tg_send(chat_id, "Я бот приглашения на день рождения Александра.\n\n"
+                         f"Чтобы получать напоминание, откройте {SITE_URL} "
+                         "и нажмите «Подключить Telegram».")
+    return {"ok": True}
+
+
+def _handle_start(chat_id: str, username: str, code: str) -> None:
+    if not code:
+        tg_send(chat_id, "Здравствуйте! Чтобы я напомнил о празднике за два дня, "
+                         f"откройте {SITE_URL}, заполните форму и нажмите "
+                         "«Подключить Telegram».")
+        return
+
+    with db.get_conn() as conn:
+        # Привязка именинника: одноразовый код из админки.
+        admin_code = db.get_setting(conn, "host_link_code")
+        if admin_code and code == admin_code:
+            db.set_setting(conn, "host_chat_id", chat_id)
+            db.set_setting(conn, "host_link_code", "")  # код одноразовый
+            tg_send(chat_id, "Готово — теперь сюда будут приходить уведомления "
+                             "о новых заявках.")
+            return
+
+        row = conn.execute(
+            "SELECT * FROM guests WHERE link_code = ?", (code,)).fetchone()
+        if row is None:
+            tg_send(chat_id, "Не узнаю этот код. Откройте страницу приглашения "
+                             "и нажмите «Подключить Telegram» ещё раз.")
+            return
+        conn.execute(
+            "UPDATE guests SET tg_chat_id = ?, tg_username = ? WHERE id = ?",
+            (chat_id, username, row["id"]),
+        )
+        name = row["name"].split()[0] if row["name"].split() else "друг"
+
+    tg_send(chat_id, f"{name}, вы в составе! 🏀\n\n"
+                     "Напомню за два дня до праздника — 22 августа, 16:00, "
+                     f"лофт в Сити.\n\nОтключить: /stop")
+
+
+@app.get("/api/admin/telegram")
+def admin_telegram(_: None = Depends(admin_auth)):
+    """Состояние бота для админки: имя, привязан ли чат именинника,
+    сколько гостей подключились."""
+    me = tg_call("getMe")
+    with db.get_conn() as conn:
+        host = db.get_setting(conn, "host_chat_id")
+        code = db.get_setting(conn, "host_link_code")
+        linked = conn.execute(
+            "SELECT count(*) AS n FROM guests WHERE tg_chat_id IS NOT NULL"
+        ).fetchone()["n"]
+        total = conn.execute("SELECT count(*) AS n FROM guests").fetchone()["n"]
+        if not host and not code:
+            code = db.new_link_code()
+            db.set_setting(conn, "host_link_code", code)
+    name = me.get("result", {}).get("username", "") if me.get("ok") else ""
+    return {
+        "configured": bool(TELEGRAM_TOKEN),
+        "ok": bool(me.get("ok")),
+        "bot": name,
+        "error": None if me.get("ok") else me.get("description"),
+        "host_linked": bool(host),
+        "host_link": f"https://t.me/{name}?start={code}" if name and code else "",
+        "guests_linked": linked,
+        "guests_total": total,
+    }
+
+
+@app.post("/api/admin/telegram/test")
+def admin_telegram_test(_: None = Depends(admin_auth)):
+    with db.get_conn() as conn:
+        chat = db.get_setting(conn, "host_chat_id")
+    if not chat:
+        raise HTTPException(status_code=400, detail="Чат именинника ещё не привязан")
+    r = tg_send(chat, "Проверка связи 🏀 Бот работает, напоминания дойдут.")
+    if not r.get("ok"):
+        raise HTTPException(status_code=502, detail=r.get("description", "ошибка Telegram"))
+    return {"ok": True}

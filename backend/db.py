@@ -46,6 +46,25 @@ MIGRATIONS = [
         # закладывать в закупку.
         "ALTER TABLE guests ADD COLUMN brings_own INTEGER NOT NULL DEFAULT 0;",
     ),
+    (
+        "003_telegram",
+        # link_code — короткий код для диплинка t.me/<bot>?start=<code>.
+        # Он отдельный от token: токен даёт полный доступ к правке записи и
+        # ему не место в ссылке, которой гость делится с ботом.
+        """
+        ALTER TABLE guests ADD COLUMN link_code TEXT;
+        ALTER TABLE guests ADD COLUMN tg_chat_id TEXT;
+        ALTER TABLE guests ADD COLUMN tg_username TEXT;
+        CREATE UNIQUE INDEX idx_guests_link_code ON guests(link_code);
+
+        -- Мелкие настройки, которые нужно пережить перезапуск: чат
+        -- именинника для уведомлений, одноразовый код его привязки.
+        CREATE TABLE settings (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """,
+    ),
 ]
 
 
@@ -101,3 +120,23 @@ def ip_hash(ip: str) -> str:
 
 def new_token() -> str:
     return secrets.token_urlsafe(24)
+
+
+def new_link_code() -> str:
+    """Код для диплинка в Telegram. Короче основного токена: он попадает
+    в ссылку и в переписку с ботом, поэтому прав на правку записи не даёт —
+    только опознаёт гостя."""
+    return secrets.token_urlsafe(9)
+
+
+def get_setting(conn, key: str, default: str = "") -> str:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else default
+
+
+def set_setting(conn, key: str, value: str) -> None:
+    conn.execute(
+        "INSERT INTO settings(key, value) VALUES (?,?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
