@@ -212,6 +212,31 @@
     margin-top: 6px;
   }
 
+  .cal-btn {
+    display: block;
+    margin-top: 16px;
+    padding: 13px;
+    text-align: center;
+    text-decoration: none;
+    background: rgba(255,198,71,0.12);
+    border: 1px solid rgba(255,198,71,0.5);
+    color: var(--hero-gold);
+    border-radius: 12px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .cal-btn:active { transform: translateY(2px); }
+  .cal-hint {
+    text-align: center;
+    font-size: 12px;
+    opacity: 0.55;
+    margin-top: 8px;
+    line-height: 1.45;
+  }
+
   /* ---------- STAT TILES ---------- */
   .stats {
     margin-top: 18px;
@@ -692,6 +717,10 @@
         <div class="val">Лофт в Сити</div>
       </div>
     </div>
+
+    <a class="cal-btn" href="/api/calendar.ics">📅 Добавить в календарь</a>
+    <div class="cal-hint">Телефон сам напомнит за два дня — это работает,
+      даже если Telegram у вас отключён.</div>
   </div>
 
   <div class="section">

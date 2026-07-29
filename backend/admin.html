@@ -86,6 +86,9 @@
   <h2 class="h2">Напоминание за два дня</h2>
   <div class="tg" id="rem"></div>
 
+  <h2 class="h2">Ограничения в еде</h2>
+  <div class="tg" id="allerg"></div>
+
   <h2 class="h2">Закупка бара</h2>
   <div class="bar-note" id="bar-note"></div>
   <div class="table-scroll" style="margin-bottom:12px">
@@ -217,6 +220,19 @@
     });
   }
 
+  async function loadAllergies() {
+    const el = document.getElementById('allerg');
+    let d;
+    try {
+      const res = await fetch('/api/admin/allergies');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      d = await res.json();
+    } catch (e) { el.innerHTML = '<span class="bad">Не удалось: ' + esc(e.message) + '</span>'; return; }
+    if (!d.count) { el.innerHTML = '<span class="muted">Никто ничего не указал.</span>'; return; }
+    el.innerHTML = '<span class="muted">Этот список — кейтерингу.</span><br>'
+      + d.items.map(i => `<b>${esc(i.name)}</b>${i.guests_count > 1 ? ' (+' + (i.guests_count - 1) + ')' : ''}: <span class="allerg">${esc(i.allergies)}</span>`).join('<br>');
+  }
+
   async function loadBar() {
     let d;
     try {
@@ -310,7 +326,7 @@
     }
   });
 
-  function loadAll() { load(); loadBar(); loadTelegram(); loadReminders(); }
+  function loadAll() { load(); loadBar(); loadTelegram(); loadReminders(); loadAllergies(); }
   document.getElementById('reload').addEventListener('click', loadAll);
   loadAll();
 </script>
