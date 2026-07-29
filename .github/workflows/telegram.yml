@@ -27,6 +27,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Сначала «созреваем» напоминания, потом разгребаем очередь: вне
+      # окна за два дня до праздника первый шаг ничего не делает.
+      - name: Queue due reminders
+        env:
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+        run: |
+          r=$(curl -sS --max-time 30 -u "admin:$ADMIN_PASSWORD" -X POST \
+                https://raikhin.duckdns.org/api/admin/reminders/run 2>&1 || true)
+          echo "напоминания: $r"
+
       - name: Send queued messages
         env:
           SITE: https://raikhin.duckdns.org

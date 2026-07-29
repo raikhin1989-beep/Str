@@ -83,6 +83,9 @@
   <h2 class="h2">Telegram</h2>
   <div class="tg" id="tg"></div>
 
+  <h2 class="h2">Напоминание за два дня</h2>
+  <div class="tg" id="rem"></div>
+
   <h2 class="h2">Закупка бара</h2>
   <div class="bar-note" id="bar-note"></div>
   <div class="table-scroll" style="margin-bottom:12px">
@@ -119,6 +122,10 @@
   const emptyEl = document.getElementById('empty');
   const errEl = document.getElementById('err');
 
+  // Всё время показываем по Москве: праздник там, а админку могут открыть
+  // из другого пояса — иначе подпись «МСК» врала бы.
+  const MSK_TZ = 'Europe/Moscow';
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
       { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -129,7 +136,9 @@
   function when(iso) {
     if (!iso) return '';
     const d = new Date(iso);
-    return isNaN(d) ? iso : d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return isNaN(d) ? iso : d.toLocaleString('ru-RU', {
+      day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+      timeZone: MSK_TZ });
   }
 
   async function loadTelegram() {
@@ -167,6 +176,40 @@
       const body = await res.json().catch(() => ({}));
       btn.textContent = res.ok ? 'В очереди ✓ уйдёт в течение часа' : 'Ошибка: ' + (body.detail || res.status);
       btn.disabled = false;
+    });
+  }
+
+  async function loadReminders() {
+    const el = document.getElementById('rem');
+    let d;
+    try {
+      const res = await fetch('/api/admin/reminders');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      d = await res.json();
+    } catch (e) { el.innerHTML = '<span class="bad">Не удалось: ' + esc(e.message) + '</span>'; return; }
+
+    const when = new Date(d.send_at).toLocaleString('ru-RU',
+      { day: '2-digit', month: 'long', hour: '2-digit', minute: '2-digit',
+        timeZone: MSK_TZ });
+    let h = `Уйдёт <b>${esc(when)}</b> (МСК). Сейчас окно ${d.window_open ? '<span class="good">открыто</span>' : 'закрыто'}.<br>`;
+    h += `Получат: <b>${d.recipients.length}</b> · уже получили: ${esc(d.already_reminded)} · `;
+    h += `без Telegram: <span class="bad">${esc(d.without_telegram)}</span><br>`;
+    if (d.recipients.length) {
+      h += '<span class="muted">' + d.recipients.map(r => esc(r.name)).join(', ') + '</span><br>';
+    }
+    h += '<details class="norms" style="margin-top:8px"><summary>Текст сообщения</summary><div>'
+       + esc(d.sample).replace(/\n/g, '<br>') + '</div></details>';
+    h += '<button class="btn ghost" id="rem-force" style="margin-top:8px">Отправить сейчас принудительно</button>';
+    el.innerHTML = h;
+
+    document.getElementById('rem-force').addEventListener('click', async (ev) => {
+      const btn = ev.target;
+      if (!confirm(`Отправить напоминание сейчас — ${d.recipients.length} шт.? Повторно тем же людям оно уже не уйдёт.`)) return;
+      btn.disabled = true; btn.textContent = 'Ставлю в очередь...';
+      const res = await fetch('/api/admin/reminders/run?force=true', { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      btn.textContent = res.ok ? `В очереди: ${body.queued} — уйдут в течение часа` : 'Ошибка';
+      loadTelegram();
     });
   }
 
@@ -263,7 +306,7 @@
     }
   });
 
-  function loadAll() { load(); loadBar(); loadTelegram(); }
+  function loadAll() { load(); loadBar(); loadTelegram(); loadReminders(); }
   document.getElementById('reload').addEventListener('click', loadAll);
   loadAll();
 </script>

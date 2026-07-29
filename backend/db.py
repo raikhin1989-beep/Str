@@ -84,6 +84,12 @@ MIGRATIONS = [
         CREATE INDEX idx_outbox_pending ON outbox(sent_at, id);
         """,
     ),
+    (
+        "005_reminded",
+        # Отметка, что напоминание уже уходило: защита от повторов, если
+        # задача по расписанию отработает дважды.
+        "ALTER TABLE guests ADD COLUMN reminded_at TEXT;",
+    ),
 ]
 
 

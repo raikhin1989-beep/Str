@@ -850,7 +850,10 @@
 
 <script>
   // ---------- Countdown ----------
-  const target = new Date(2026, 7, 22, 16, 0, 0).getTime(); // month is 0-indexed: 7 = August
+  // Абсолютный момент с указанием пояса. Прежний вариант
+  // new Date(2026, 7, 22, 16, 0, 0) означал «16:00 по часам гостя»,
+  // и у любого не в Москве отсчёт врал бы на разницу поясов.
+  const target = new Date('2026-08-22T16:00:00+03:00').getTime();
 
   function updateClock() {
     const now = Date.now();

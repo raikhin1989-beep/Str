@@ -14,7 +14,7 @@ import json
 import os
 import secrets as pysecrets
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
@@ -705,3 +705,86 @@ def outbox_ack(ack: OutboxAck, _: None = Depends(admin_auth)):
                 (str(item.get("error", ""))[:200], item.get("id")),
             )
     return {"ok": True, "sent": len(ack.sent), "failed": len(ack.failed)}
+
+
+# ── НАПОМИНАНИЕ ЗА ДВА ДНЯ ──────────────────────────────────────────────────
+# Время события задано с явным смещением: Москва круглый год UTC+3, поэтому
+# фиксированный сдвиг корректен и не тянет зависимость от базы часовых поясов.
+MSK = timezone(timedelta(hours=3))
+EVENT_AT = datetime(2026, 8, 22, 16, 0, tzinfo=MSK)
+REMIND_BEFORE = timedelta(days=2)
+
+
+def reminder_text(row) -> str:
+    name = row["name"].split()[0] if row["name"].split() else "Друг"
+    return (f"{name}, послезавтра играем! 🏀\n\n"
+            "<b>22 августа, 16:00</b>, лофт в Сити.\n"
+            "Дресс-код: нарядно плюс один геройский акцент.\n\n"
+            f"Поменять ответ: {SITE_URL}")
+
+
+def _pending_reminders(conn):
+    return conn.execute(
+        "SELECT * FROM guests"
+        " WHERE tg_chat_id IS NOT NULL AND reminded_at IS NULL"
+        " ORDER BY created_at, id"
+    ).fetchall()
+
+
+@app.get("/api/admin/reminders")
+def reminders_status(_: None = Depends(admin_auth)):
+    """Предпросмотр: кому уйдёт напоминание и когда. Ничего не отправляет —
+    без такого режима проверить рассылку можно было бы только дождавшись
+    20 августа."""
+    now = datetime.now(timezone.utc)
+    send_at = EVENT_AT - REMIND_BEFORE
+    with db.get_conn() as conn:
+        pending = _pending_reminders(conn)
+        already = conn.execute(
+            "SELECT count(*) AS n FROM guests WHERE reminded_at IS NOT NULL"
+        ).fetchone()["n"]
+        no_tg = conn.execute(
+            "SELECT count(*) AS n FROM guests WHERE tg_chat_id IS NULL"
+        ).fetchone()["n"]
+    return {
+        "send_at": send_at.isoformat(),
+        "event_at": EVENT_AT.isoformat(),
+        "now": now.astimezone(MSK).isoformat(),
+        "window_open": send_at <= now < EVENT_AT,
+        "recipients": [
+            {"name": short_name(r["name"]), "tg": r["tg_username"] or r["tg_chat_id"]}
+            for r in pending
+        ],
+        "already_reminded": already,
+        "without_telegram": no_tg,
+        "sample": reminder_text(pending[0]) if pending else
+                  "Имя, послезавтра играем! 🏀 …",
+    }
+
+
+@app.post("/api/admin/reminders/run")
+def reminders_run(force: bool = False, _: None = Depends(admin_auth)):
+    """Складывает напоминания в очередь. Вызывается задачей по расписанию;
+    вне окна ничего не делает. force=true — отправить принудительно, чтобы
+    можно было проверить рассылку заранее."""
+    now = datetime.now(timezone.utc)
+    send_at = EVENT_AT - REMIND_BEFORE
+    in_window = send_at <= now < EVENT_AT
+    if not in_window and not force:
+        return {"queued": 0, "window_open": False,
+                "reason": f"окно откроется {send_at.astimezone(MSK):%d.%m %H:%M} МСК"}
+
+    ts = now_iso()
+    queued = 0
+    with db.get_conn() as conn:
+        for row in _pending_reminders(conn):
+            conn.execute(
+                "INSERT INTO outbox(chat_id, text, kind, created_at) VALUES (?,?,?,?)",
+                (row["tg_chat_id"], reminder_text(row), "reminder", ts),
+            )
+            # Отметку ставим в той же транзакции, что и постановку в очередь:
+            # иначе сбой между ними разослал бы напоминание дважды.
+            conn.execute("UPDATE guests SET reminded_at = ? WHERE id = ?",
+                         (ts, row["id"]))
+            queued += 1
+    return {"queued": queued, "window_open": in_window, "forced": force}
