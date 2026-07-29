@@ -8,6 +8,7 @@ GET /api/roster — список для всех, с сокращёнными и
 остальное — статикой из /var/www/html.
 """
 import csv
+import hashlib
 import io
 import json
 import os
@@ -15,9 +16,6 @@ import secrets as pysecrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-import urllib.error
-import urllib.parse
-import urllib.request
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
@@ -37,6 +35,9 @@ STARTED_AT = time.time()
 # Сколько заявок с одного адреса принимаем в час. Гостей десятки, так что
 # порог щедрый для семьи за одним роутером и всё ещё бесполезен для бота.
 RATE_LIMIT_PER_HOUR = 12
+
+# Сколько раз пробуем отправить сообщение, прежде чем бросить.
+MAX_ATTEMPTS = 5
 
 FIELD_LABELS = {
     "name": "имя",
@@ -504,87 +505,59 @@ def admin_bar(_: None = Depends(admin_auth)):
 
 
 # ── TELEGRAM ────────────────────────────────────────────────────────────────
-# Бот нужен для двух вещей: напомнить гостю за два дня (шаг 8) и сообщить
-# имениннику о новой заявке. Работаем через вебхук, а не поллинг: HTTPS с
-# валидным сертификатом уже есть, и лишний вечно живущий процесс не нужен.
+# Сервер физически не может обратиться к api.telegram.org: провайдер хостинга
+# блокирует его (проверено — контрольные хосты отвечают за доли секунды,
+# оба адреса Telegram молчат). Поэтому приложение НИКОГДА не ходит в Telegram
+# само: оно кладёт сообщения в таблицу outbox, а рассылает их задача
+# GitHub Actions, у раннеров доступ есть. Входящие от Telegram к нам приходят
+# вебхуком — это встречное направление, оно не блокируется.
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TG_API = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-WEBHOOK_SECRET_PATH = Path(os.environ.get("STR_DATA_DIR", "/opt/str-api/data")) / "tg_webhook_secret"
+# Имя бота приходит из деплоя: спросить getMe отсюда нельзя.
+BOT_USERNAME = os.environ.get("TG_BOT_USERNAME", "")
+ADMIN_PASSWORD_FOR_HOOK = os.environ.get("ADMIN_PASSWORD", "")
 SITE_URL = os.environ.get("SITE_URL", "https://raikhin.duckdns.org")
 
 
-def tg_call(method: str, **params) -> dict:
-    """Вызов Bot API на stdlib: ради двух методов тянуть http-клиент незачем.
-    Ошибки не пробрасываем — упавшее уведомление не должно ронять заявку."""
-    if not TELEGRAM_TOKEN:
-        return {"ok": False, "description": "TELEGRAM_BOT_TOKEN не задан"}
-    data = urllib.parse.urlencode(
-        {k: v for k, v in params.items() if v is not None}).encode()
-    try:
-        with urllib.request.urlopen(f"{TG_API}/{method}", data=data, timeout=8) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        try:
-            return json.loads(e.read())
-        except Exception:
-            return {"ok": False, "description": f"HTTP {e.code}"}
-    except Exception as e:
-        return {"ok": False, "description": str(e)}
-
-
-def tg_send(chat_id: str, text: str) -> dict:
-    return tg_call("sendMessage", chat_id=chat_id, text=text,
-                   parse_mode="HTML", disable_web_page_preview="true")
-
-
-_BOT_USERNAME: str | None = None
-_BOT_LAST_TRY: float = 0.0
-BOT_RETRY_SECONDS = 60
-
-
-def bot_username() -> str:
-    """Имя бота для диплинков.
-
-    Кэшируем только успех: если Telegram сейчас недоступен, пустое значение
-    запоминать навсегда нельзя — связь может вернуться, а процесс живёт
-    неделями. Но и дёргать недоступный API на каждый запрос страницы тоже
-    нельзя: запрос гостя ждал бы таймаута. Отсюда пауза между попытками.
-    """
-    global _BOT_USERNAME, _BOT_LAST_TRY
-    if _BOT_USERNAME:
-        return _BOT_USERNAME
-    if not TELEGRAM_TOKEN:
+def webhook_secret() -> str:
+    """Секрет вебхука выводится из пароля админки, а не хранится файлом:
+    его должны одинаково вычислить и сервер, и раннер, который вызывает
+    setWebhook. Общий секрет у них уже есть."""
+    if not ADMIN_PASSWORD_FOR_HOOK:
         return ""
-    if time.time() - _BOT_LAST_TRY < BOT_RETRY_SECONDS:
-        return ""
-    _BOT_LAST_TRY = time.time()
-    r = tg_call("getMe")
-    if r.get("ok"):
-        _BOT_USERNAME = r.get("result", {}).get("username", "")
-    return _BOT_USERNAME or ""
+    return hashlib.sha256(
+        ("tg-webhook:" + ADMIN_PASSWORD_FOR_HOOK).encode()).hexdigest()
+
+
+def enqueue(chat_id: str, text: str, kind: str = "") -> None:
+    """Поставить сообщение в очередь. Отправкой займётся GitHub Actions."""
+    if not chat_id:
+        return
+    with db.get_conn() as conn:
+        conn.execute(
+            "INSERT INTO outbox(chat_id, text, kind, created_at) VALUES (?,?,?,?)",
+            (str(chat_id), text, kind, now_iso()),
+        )
 
 
 def notify_host(text: str) -> None:
-    """Сообщение имениннику, если он привязал свой чат."""
     with db.get_conn() as conn:
         chat = db.get_setting(conn, "host_chat_id")
-    if chat:
-        tg_send(chat, text)
+    enqueue(chat, text, "host")
 
 
 @app.get("/api/telegram")
 def telegram_public():
     """Публично отдаём только имя бота — оно и так видно всем в Telegram.
     Нужно странице, чтобы собрать ссылку «Подключить Telegram»."""
-    return {"bot": bot_username()}
+    return {"bot": BOT_USERNAME}
 
 
 @app.post("/api/tg/webhook")
 async def tg_webhook(request: Request):
     """Точка приёма обновлений. Путь публичный — его зовёт Telegram, — но
     закрыт секретным заголовком, который знают только Telegram и сервер."""
-    expected = WEBHOOK_SECRET_PATH.read_text().strip() if WEBHOOK_SECRET_PATH.exists() else ""
+    expected = webhook_secret()
     got = request.headers.get("x-telegram-bot-api-secret-token", "")
     if not expected or not pysecrets.compare_digest(got, expected):
         raise HTTPException(status_code=403, detail="forbidden")
@@ -600,43 +573,41 @@ async def tg_webhook(request: Request):
 
     if text.startswith("/start"):
         parts = text.split(maxsplit=1)
-        code = parts[1].strip() if len(parts) > 1 else ""
-        _handle_start(chat_id, username, code)
+        _handle_start(chat_id, username, parts[1].strip() if len(parts) > 1 else "")
     elif text.startswith("/stop"):
         with db.get_conn() as conn:
             conn.execute(
                 "UPDATE guests SET tg_chat_id = NULL WHERE tg_chat_id = ?", (chat_id,))
-        tg_send(chat_id, "Отключил уведомления. Вернуться можно по той же кнопке "
-                         "на странице приглашения.")
+        enqueue(chat_id, "Отключил напоминания. Вернуться можно той же кнопкой "
+                         "на странице приглашения.", "stop")
     else:
-        tg_send(chat_id, "Я бот приглашения на день рождения Александра.\n\n"
+        enqueue(chat_id, "Я бот приглашения на день рождения Александра.\n\n"
                          f"Чтобы получать напоминание, откройте {SITE_URL} "
-                         "и нажмите «Подключить Telegram».")
+                         "и нажмите «Подключить Telegram».", "help")
     return {"ok": True}
 
 
 def _handle_start(chat_id: str, username: str, code: str) -> None:
     if not code:
-        tg_send(chat_id, "Здравствуйте! Чтобы я напомнил о празднике за два дня, "
+        enqueue(chat_id, "Здравствуйте! Чтобы я напомнил о празднике за два дня, "
                          f"откройте {SITE_URL}, заполните форму и нажмите "
-                         "«Подключить Telegram».")
+                         "«Подключить Telegram».", "start")
         return
 
     with db.get_conn() as conn:
-        # Привязка именинника: одноразовый код из админки.
         admin_code = db.get_setting(conn, "host_link_code")
         if admin_code and code == admin_code:
             db.set_setting(conn, "host_chat_id", chat_id)
             db.set_setting(conn, "host_link_code", "")  # код одноразовый
-            tg_send(chat_id, "Готово — теперь сюда будут приходить уведомления "
-                             "о новых заявках.")
+            enqueue(chat_id, "Готово — сюда будут приходить уведомления "
+                             "о новых заявках.", "host-linked")
             return
 
         row = conn.execute(
             "SELECT * FROM guests WHERE link_code = ?", (code,)).fetchone()
         if row is None:
-            tg_send(chat_id, "Не узнаю этот код. Откройте страницу приглашения "
-                             "и нажмите «Подключить Telegram» ещё раз.")
+            enqueue(chat_id, "Не узнаю этот код. Откройте страницу приглашения "
+                             "и нажмите «Подключить Telegram» ещё раз.", "unknown")
             return
         conn.execute(
             "UPDATE guests SET tg_chat_id = ?, tg_username = ? WHERE id = ?",
@@ -644,16 +615,13 @@ def _handle_start(chat_id: str, username: str, code: str) -> None:
         )
         name = row["name"].split()[0] if row["name"].split() else "друг"
 
-    tg_send(chat_id, f"{name}, вы в составе! 🏀\n\n"
-                     "Напомню за два дня до праздника — 22 августа, 16:00, "
-                     f"лофт в Сити.\n\nОтключить: /stop")
+    enqueue(chat_id, f"{name}, вы в составе! 🏀\n\nНапомню за два дня до "
+                     "праздника — 22 августа, 16:00, лофт в Сити.\n\n"
+                     "Отключить: /stop", "linked")
 
 
 @app.get("/api/admin/telegram")
 def admin_telegram(_: None = Depends(admin_auth)):
-    """Состояние бота для админки: имя, привязан ли чат именинника,
-    сколько гостей подключились."""
-    me = tg_call("getMe")
     with db.get_conn() as conn:
         host = db.get_setting(conn, "host_chat_id")
         code = db.get_setting(conn, "host_link_code")
@@ -661,19 +629,33 @@ def admin_telegram(_: None = Depends(admin_auth)):
             "SELECT count(*) AS n FROM guests WHERE tg_chat_id IS NOT NULL"
         ).fetchone()["n"]
         total = conn.execute("SELECT count(*) AS n FROM guests").fetchone()["n"]
+        # Ждущими считаем только те, что ещё будут отправлены: исчерпавшие
+        # попытки висели бы в счётчике вечно и выглядели как затор.
+        pending = conn.execute(
+            "SELECT count(*) AS n FROM outbox WHERE sent_at IS NULL AND attempts < ?",
+            (MAX_ATTEMPTS,)).fetchone()["n"]
+        stuck = conn.execute(
+            "SELECT count(*) AS n FROM outbox WHERE sent_at IS NULL AND attempts >= ?",
+            (MAX_ATTEMPTS,)).fetchone()["n"]
+        sent = conn.execute(
+            "SELECT count(*) AS n FROM outbox WHERE sent_at IS NOT NULL").fetchone()["n"]
+        last = conn.execute(
+            "SELECT sent_at FROM outbox WHERE sent_at IS NOT NULL"
+            " ORDER BY sent_at DESC LIMIT 1").fetchone()
         if not host and not code:
             code = db.new_link_code()
             db.set_setting(conn, "host_link_code", code)
-    name = me.get("result", {}).get("username", "") if me.get("ok") else ""
     return {
-        "configured": bool(TELEGRAM_TOKEN),
-        "ok": bool(me.get("ok")),
-        "bot": name,
-        "error": None if me.get("ok") else me.get("description"),
+        "configured": bool(TELEGRAM_TOKEN and BOT_USERNAME),
+        "bot": BOT_USERNAME,
         "host_linked": bool(host),
-        "host_link": f"https://t.me/{name}?start={code}" if name and code else "",
+        "host_link": f"https://t.me/{BOT_USERNAME}?start={code}" if BOT_USERNAME and code else "",
         "guests_linked": linked,
         "guests_total": total,
+        "queue_pending": pending,
+        "queue_stuck": stuck,
+        "queue_sent": sent,
+        "last_sent_at": last["sent_at"] if last else None,
     }
 
 
@@ -683,7 +665,43 @@ def admin_telegram_test(_: None = Depends(admin_auth)):
         chat = db.get_setting(conn, "host_chat_id")
     if not chat:
         raise HTTPException(status_code=400, detail="Чат именинника ещё не привязан")
-    r = tg_send(chat, "Проверка связи 🏀 Бот работает, напоминания дойдут.")
-    if not r.get("ok"):
-        raise HTTPException(status_code=502, detail=r.get("description", "ошибка Telegram"))
-    return {"ok": True}
+    enqueue(chat, "Проверка связи 🏀 Очередь работает, напоминания дойдут.", "test")
+    return {"ok": True, "queued": True}
+
+
+# ── ОЧЕРЕДЬ ДЛЯ РАССЫЛЬЩИКА ─────────────────────────────────────────────────
+# Эти два эндпоинта зовёт задача GitHub Actions под тем же паролем, что и
+# админку: отдельный секрет ради одного потребителя усложнил бы настройку.
+
+class OutboxAck(BaseModel):
+    sent: list[int] = []
+    failed: list[dict] = []
+
+
+@app.get("/api/admin/outbox")
+def outbox_pending(limit: int = 50, _: None = Depends(admin_auth)):
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, chat_id, text FROM outbox"
+            " WHERE sent_at IS NULL AND attempts < ?"
+            " ORDER BY id LIMIT ?",
+            (MAX_ATTEMPTS, max(1, min(limit, 200))),
+        ).fetchall()
+    return {"messages": [dict(r) for r in rows]}
+
+
+@app.post("/api/admin/outbox/ack")
+def outbox_ack(ack: OutboxAck, _: None = Depends(admin_auth)):
+    ts = now_iso()
+    with db.get_conn() as conn:
+        for mid in ack.sent:
+            conn.execute("UPDATE outbox SET sent_at = ? WHERE id = ?", (ts, mid))
+        for item in ack.failed:
+            # Попытки считаем, чтобы битое сообщение (например, гость
+            # заблокировал бота) не крутилось в очереди вечно.
+            conn.execute(
+                "UPDATE outbox SET attempts = attempts + 1, last_error = ?"
+                " WHERE id = ?",
+                (str(item.get("error", ""))[:200], item.get("id")),
+            )
+    return {"ok": True, "sent": len(ack.sent), "failed": len(ack.failed)}

@@ -1,0 +1,35 @@
+name: Telegram outbox
+
+# Рассылка сообщений из очереди.
+#
+# Живёт отдельной задачей, потому что сервер не может обратиться к
+# api.telegram.org — провайдер хостинга его блокирует (проверено: контрольные
+# хосты отвечают за доли секунды, оба адреса Telegram молчат). У раннеров
+# GitHub доступ есть, поэтому отправка происходит здесь, а сервер только
+# складывает сообщения в таблицу outbox.
+#
+# Секреты: TELEGRAM_BOT_TOKEN, ADMIN_PASSWORD (им же закрыты эндпоинты очереди).
+
+on:
+  schedule:
+    # Раз в час. Напоминание за два дня от такой точности не страдает,
+    # а ответы бота на «Старт» приходят с задержкой — это цена блокировки.
+    - cron: '7 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: telegram-outbox
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Send queued messages
+        env:
+          SITE: https://raikhin.duckdns.org
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: python3 scripts/send_outbox.py

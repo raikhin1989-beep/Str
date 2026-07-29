@@ -65,6 +65,25 @@ MIGRATIONS = [
         );
         """,
     ),
+    (
+        "004_outbox",
+        # Сервер не может достучаться до Telegram — провайдер блокирует.
+        # Поэтому он только кладёт сообщения в очередь, а рассылает их
+        # задача GitHub Actions, у которой доступ есть.
+        """
+        CREATE TABLE outbox (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id    TEXT    NOT NULL,
+            text       TEXT    NOT NULL,
+            kind       TEXT    NOT NULL DEFAULT '',
+            created_at TEXT    NOT NULL,
+            sent_at    TEXT,
+            attempts   INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT    NOT NULL DEFAULT ''
+        );
+        CREATE INDEX idx_outbox_pending ON outbox(sent_at, id);
+        """,
+    ),
 ]
 
 

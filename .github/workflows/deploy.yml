@@ -137,11 +137,42 @@ jobs:
           if printf '%s' "$r" | grep -q '"ok":true'; then
             name=$(printf '%s' "$r" | grep -o '"username":"[^"]*"' | cut -d'"' -f4)
             echo "TG_RUNNER=ДОСТУПЕН, бот @$name" >> "$GITHUB_ENV"
+            echo "TG_BOT_USERNAME=$name" >> "$GITHUB_ENV"
             echo "с раннера Telegram доступен, бот @$name"
           else
             echo "TG_RUNNER=НЕДОСТУПЕН и с раннера" >> "$GITHUB_ENV"
+            echo "TG_BOT_USERNAME=" >> "$GITHUB_ENV"
             echo "::warning::с раннера Telegram тоже недоступен"
           fi
+
+      # Вебхук регистрирует раннер: сервер до Telegram не достаёт. Секрет
+      # выводится из пароля админки, поэтому его не нужно нигде хранить —
+      # сервер вычислит такой же.
+      - name: Register Telegram webhook
+        if: ${{ env.TG_BOT_USERNAME != '' }}
+        env:
+          TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          PW: ${{ secrets.ADMIN_PASSWORD }}
+        run: |
+          if [ -z "$PW" ]; then
+            echo "TG_WEBHOOK=пропущен: не задан ADMIN_PASSWORD" >> "$GITHUB_ENV"; exit 0
+          fi
+          secret=$(printf 'tg-webhook:%s' "$PW" | sha256sum | cut -d' ' -f1)
+          r=$(curl -sS --max-time 25 "https://api.telegram.org/bot$TOKEN/setWebhook" \
+                --data-urlencode "url=https://$SITE_DOMAIN/api/tg/webhook" \
+                --data-urlencode "secret_token=$secret" \
+                --data-urlencode 'allowed_updates=["message"]' 2>&1 || true)
+          if printf '%s' "$r" | grep -q '"ok":true'; then
+            echo "TG_WEBHOOK=поставлен" >> "$GITHUB_ENV"
+          else
+            echo "TG_WEBHOOK=НЕ ПОСТАВЛЕН: $(printf '%s' "$r" | head -c 150)" >> "$GITHUB_ENV"
+            echo "::warning::setWebhook не удался"
+          fi
+          # Отдельно спрашиваем, доходят ли до нас входящие: если Telegram
+          # не может достучаться до сервера, здесь будет last_error_message.
+          info=$(curl -sS --max-time 25 "https://api.telegram.org/bot$TOKEN/getWebhookInfo" 2>&1 || true)
+          err=$(printf '%s' "$info" | grep -o '"last_error_message":"[^"]*"' | head -1)
+          echo "TG_HOOKINFO=${err:-без ошибок доставки}" >> "$GITHUB_ENV"
 
       # Пакеты ставятся отдельным шагом до заливки файлов: rsync нужен на
       # сервере раньше, чем мы попробуем в него синхронизировать сайт.
@@ -239,7 +270,7 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT || 22 }}
           command_timeout: 10m
-          envs: GITHUB_SHA,SITE_DOMAIN,SERVER_ADDR,ACME_EMAIL,ADMIN_PASSWORD,TELEGRAM_BOT_TOKEN,TG_RUNNER
+          envs: GITHUB_SHA,SITE_DOMAIN,SERVER_ADDR,ACME_EMAIL,ADMIN_PASSWORD,TELEGRAM_BOT_TOKEN,TG_BOT_USERNAME,TG_RUNNER,TG_WEBHOOK,TG_HOOKINFO
           script: |
             set -e
             printf '%s\n' "$GITHUB_SHA" > /var/www/html/version
@@ -266,6 +297,7 @@ jobs:
             Environment=STR_DATA_DIR=/opt/str-api/data
             Environment="ADMIN_PASSWORD=$ADMIN_PASSWORD"
             Environment="TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
+            Environment="TG_BOT_USERNAME=$TG_BOT_USERNAME"
             Environment="SITE_URL=https://$SITE_DOMAIN"
             ExecStart=/opt/str-api/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
             Restart=always
@@ -297,58 +329,19 @@ jobs:
             fi
             echo "api напрямую: $(curl -fsS http://127.0.0.1:8000/api/health)"
 
-            echo "=== вебхук Telegram ==="
-            # Шаг НЕ критичный: если Telegram недоступен, сайт и заявки
-            # работают дальше, а результат кладём в /tg-status, потому что
-            # логи Actions в этом окружении не прочитать.
-            TGS=/var/www/html/tg-status
-            mask() { sed "s/${TELEGRAM_BOT_TOKEN:-__nope__}/***/g"; }
+            echo "=== состояние Telegram ==="
+            # Сервер в Telegram не ходит вообще: провайдер блокирует
+            # api.telegram.org. Здесь только фиксируем, что выяснил раннер,
+            # чтобы это было видно снаружи обычным curl.
             {
               echo "checked_at=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-              echo "с_раннера_github=$TG_RUNNER"
-              if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
-                echo "token=не задан"
-              else
-                echo "token=задан"
-                echo "dns_default=$(getent hosts api.telegram.org 2>/dev/null | head -1 || echo 'НЕ РЕЗОЛВИТСЯ')"
-                echo "dns_ipv4=$(getent ahostsv4 api.telegram.org 2>/dev/null | head -1 || echo 'НЕТ A-ЗАПИСИ')"
-                echo "https_ipv4=$(curl -4 -sS -o /dev/null -w '%{http_code} за %{time_total}s' --max-time 15 https://api.telegram.org/ 2>&1)"
-                # Контрольные хосты: отличить адресную блокировку Telegram
-                # от общей поломки сети. Если контрольные отвечают, а Telegram
-                # нет — блокируют именно его.
-                probe() { curl -4 -sS -o /dev/null -w "%{http_code} за %{time_total}s" --max-time 12 "$1" 2>&1 | tail -1; }
-                echo "проба telegram_ip2=$(probe https://149.154.167.220/)"
-                echo "проба КОНТРОЛЬ_github=$(probe https://api.github.com/)"
-                echo "проба КОНТРОЛЬ_duckdns=$(probe https://www.duckdns.org/)"
-                echo "проба КОНТРОЛЬ_letsencrypt=$(probe https://acme-v02.api.letsencrypt.org/directory)"
-                echo "tcp443=$(timeout 10 bash -c 'exec 3<>/dev/tcp/api.telegram.org/443' 2>&1 && echo OK || echo 'НЕТ СОЕДИНЕНИЯ')"
-                echo "https=$(curl -sS -o /dev/null -w '%{http_code} за %{time_total}s' --max-time 20 https://api.telegram.org/ 2>&1)"
-              fi
-            } > "$TGS"
-
-            if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$SITE_DOMAIN" ]; then
-              SEC=/opt/str-api/data/tg_webhook_secret
-              [ -s "$SEC" ] || openssl rand -hex 32 > "$SEC"
-              chmod 600 "$SEC"; chown strapi:strapi "$SEC"
-              me=$(curl -4 -sS --max-time 25 "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe" 2>&1 || true)
-              if printf '%s' "$me" | grep -q '"ok":true'; then
-                echo "getMe=$(printf '%s' "$me" | grep -o '"username":"[^"]*"' | head -1)" >> "$TGS"
-                hook=$(curl -4 -sS --max-time 25 \
-                  "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
-                  --data-urlencode "url=https://$SITE_DOMAIN/api/tg/webhook" \
-                  --data-urlencode "secret_token=$(cat $SEC)" \
-                  --data-urlencode 'allowed_updates=["message"]' 2>&1 || true)
-                echo "setWebhook=$(printf '%s' "$hook" | mask | head -c 200)" >> "$TGS"
-                printf '%s' "$hook" | grep -q '"ok":true' \
-                  && echo "итог=бот подключён" >> "$TGS" \
-                  || echo "итог=ВЕБХУК НЕ ПОСТАВЛЕН" >> "$TGS"
-              else
-                echo "getMe=$(printf '%s' "$me" | mask | head -c 200)" >> "$TGS"
-                echo "итог=TELEGRAM НЕДОСТУПЕН ИЛИ ТОКЕН ОТКЛОНЁН" >> "$TGS"
-                echo "::warning::Telegram недоступен с сервера — бот выключен, остальное работает"
-              fi
-            fi
-            cat "$TGS"
+              echo "с_раннера=$TG_RUNNER"
+              echo "бот=${TG_BOT_USERNAME:-<нет>}"
+              echo "вебхук=${TG_WEBHOOK:-не ставился}"
+              echo "доставка_входящих=${TG_HOOKINFO:-не проверялась}"
+              echo "исходящие=через задачу GitHub Actions (сервер заблокирован)"
+            } > /var/www/html/tg-status
+            cat /var/www/html/tg-status
 
             echo "=== пишем Caddyfile ==="
             # /api/* уходит на uvicorn, всё остальное отдаётся статикой.
