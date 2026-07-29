@@ -267,29 +267,46 @@ jobs:
             echo "api напрямую: $(curl -fsS http://127.0.0.1:8000/api/health)"
 
             echo "=== вебхук Telegram ==="
-            if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$SITE_DOMAIN" ]; then
-              # Секрет вебхука живёт на сервере: его должны знать только
-              # Telegram и приложение, в репозитории ему делать нечего.
-              SEC=/opt/str-api/data/tg_webhook_secret
-              [ -s "$SEC" ] || { openssl rand -hex 32 > "$SEC"; }
-              chmod 600 "$SEC"; chown strapi:strapi "$SEC"
-              me=$(curl -sS --max-time 20 "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe")
-              if ! printf '%s' "$me" | grep -q '"ok":true'; then
-                echo "::error::Telegram отклонил токен — проверьте секрет TELEGRAM_BOT_TOKEN"
-                printf '%s\n' "$me" | sed 's/'"$TELEGRAM_BOT_TOKEN"'/***/g'
-                exit 1
+            # Шаг НЕ критичный: если Telegram недоступен, сайт и заявки
+            # работают дальше, а результат кладём в /tg-status, потому что
+            # логи Actions в этом окружении не прочитать.
+            TGS=/var/www/html/tg-status
+            mask() { sed "s/${TELEGRAM_BOT_TOKEN:-__nope__}/***/g"; }
+            {
+              echo "checked_at=$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+              if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+                echo "token=не задан"
+              else
+                echo "token=задан"
+                echo "dns=$(getent hosts api.telegram.org 2>/dev/null | head -1 || echo 'НЕ РЕЗОЛВИТСЯ')"
+                echo "tcp443=$(timeout 10 bash -c 'exec 3<>/dev/tcp/api.telegram.org/443' 2>&1 && echo OK || echo 'НЕТ СОЕДИНЕНИЯ')"
+                echo "https=$(curl -sS -o /dev/null -w '%{http_code} за %{time_total}s' --max-time 20 https://api.telegram.org/ 2>&1)"
               fi
-              echo "бот: $(printf '%s' "$me" | grep -o '"username":"[^"]*"' | head -1)"
-              hook=$(curl -sS --max-time 20 \
-                "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
-                --data-urlencode "url=https://$SITE_DOMAIN/api/tg/webhook" \
-                --data-urlencode "secret_token=$(cat $SEC)" \
-                --data-urlencode "allowed_updates=[\"message\"]")
-              echo "setWebhook: $(printf '%s' "$hook" | sed 's/'"$TELEGRAM_BOT_TOKEN"'/***/g')"
-              printf '%s' "$hook" | grep -q '"ok":true' || { echo "::error::не удалось поставить вебхук"; exit 1; }
-            else
-              echo "TELEGRAM_BOT_TOKEN не задан — бот выключен, это не ошибка"
+            } > "$TGS"
+
+            if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$SITE_DOMAIN" ]; then
+              SEC=/opt/str-api/data/tg_webhook_secret
+              [ -s "$SEC" ] || openssl rand -hex 32 > "$SEC"
+              chmod 600 "$SEC"; chown strapi:strapi "$SEC"
+              me=$(curl -sS --max-time 25 "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe" 2>&1 || true)
+              if printf '%s' "$me" | grep -q '"ok":true'; then
+                echo "getMe=$(printf '%s' "$me" | grep -o '"username":"[^"]*"' | head -1)" >> "$TGS"
+                hook=$(curl -sS --max-time 25 \
+                  "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+                  --data-urlencode "url=https://$SITE_DOMAIN/api/tg/webhook" \
+                  --data-urlencode "secret_token=$(cat $SEC)" \
+                  --data-urlencode 'allowed_updates=["message"]' 2>&1 || true)
+                echo "setWebhook=$(printf '%s' "$hook" | mask | head -c 200)" >> "$TGS"
+                printf '%s' "$hook" | grep -q '"ok":true' \
+                  && echo "итог=бот подключён" >> "$TGS" \
+                  || echo "итог=ВЕБХУК НЕ ПОСТАВЛЕН" >> "$TGS"
+              else
+                echo "getMe=$(printf '%s' "$me" | mask | head -c 200)" >> "$TGS"
+                echo "итог=TELEGRAM НЕДОСТУПЕН ИЛИ ТОКЕН ОТКЛОНЁН" >> "$TGS"
+                echo "::warning::Telegram недоступен с сервера — бот выключен, остальное работает"
+              fi
             fi
+            cat "$TGS"
 
             echo "=== пишем Caddyfile ==="
             # /api/* уходит на uvicorn, всё остальное отдаётся статикой.

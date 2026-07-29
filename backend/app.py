@@ -522,7 +522,7 @@ def tg_call(method: str, **params) -> dict:
     data = urllib.parse.urlencode(
         {k: v for k, v in params.items() if v is not None}).encode()
     try:
-        with urllib.request.urlopen(f"{TG_API}/{method}", data=data, timeout=15) as r:
+        with urllib.request.urlopen(f"{TG_API}/{method}", data=data, timeout=8) as r:
             return json.loads(r.read())
     except urllib.error.HTTPError as e:
         try:
@@ -538,17 +538,31 @@ def tg_send(chat_id: str, text: str) -> dict:
                    parse_mode="HTML", disable_web_page_preview="true")
 
 
-def bot_username() -> str:
-    """Имя бота нужно для диплинков. Кэшируем в памяти процесса — оно не
-    меняется, а дёргать getMe на каждый запрос страницы незачем."""
-    global _BOT_USERNAME
-    if _BOT_USERNAME is None:
-        r = tg_call("getMe")
-        _BOT_USERNAME = r.get("result", {}).get("username", "") if r.get("ok") else ""
-    return _BOT_USERNAME
-
-
 _BOT_USERNAME: str | None = None
+_BOT_LAST_TRY: float = 0.0
+BOT_RETRY_SECONDS = 60
+
+
+def bot_username() -> str:
+    """Имя бота для диплинков.
+
+    Кэшируем только успех: если Telegram сейчас недоступен, пустое значение
+    запоминать навсегда нельзя — связь может вернуться, а процесс живёт
+    неделями. Но и дёргать недоступный API на каждый запрос страницы тоже
+    нельзя: запрос гостя ждал бы таймаута. Отсюда пауза между попытками.
+    """
+    global _BOT_USERNAME, _BOT_LAST_TRY
+    if _BOT_USERNAME:
+        return _BOT_USERNAME
+    if not TELEGRAM_TOKEN:
+        return ""
+    if time.time() - _BOT_LAST_TRY < BOT_RETRY_SECONDS:
+        return ""
+    _BOT_LAST_TRY = time.time()
+    r = tg_call("getMe")
+    if r.get("ok"):
+        _BOT_USERNAME = r.get("result", {}).get("username", "")
+    return _BOT_USERNAME or ""
 
 
 def notify_host(text: str) -> None:
