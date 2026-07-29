@@ -291,7 +291,15 @@ jobs:
                 echo "token=задан"
                 echo "dns_default=$(getent hosts api.telegram.org 2>/dev/null | head -1 || echo 'НЕ РЕЗОЛВИТСЯ')"
                 echo "dns_ipv4=$(getent ahostsv4 api.telegram.org 2>/dev/null | head -1 || echo 'НЕТ A-ЗАПИСИ')"
-                echo "https_ipv4=$(curl -4 -sS -o /dev/null -w '%{http_code} за %{time_total}s' --max-time 20 https://api.telegram.org/ 2>&1)"
+                echo "https_ipv4=$(curl -4 -sS -o /dev/null -w '%{http_code} за %{time_total}s' --max-time 15 https://api.telegram.org/ 2>&1)"
+                # Контрольные хосты: отличить адресную блокировку Telegram
+                # от общей поломки сети. Если контрольные отвечают, а Telegram
+                # нет — блокируют именно его.
+                probe() { curl -4 -sS -o /dev/null -w "%{http_code} за %{time_total}s" --max-time 12 "$1" 2>&1 | tail -1; }
+                echo "проба telegram_ip2=$(probe https://149.154.167.220/)"
+                echo "проба КОНТРОЛЬ_github=$(probe https://api.github.com/)"
+                echo "проба КОНТРОЛЬ_duckdns=$(probe https://www.duckdns.org/)"
+                echo "проба КОНТРОЛЬ_letsencrypt=$(probe https://acme-v02.api.letsencrypt.org/directory)"
                 echo "tcp443=$(timeout 10 bash -c 'exec 3<>/dev/tcp/api.telegram.org/443' 2>&1 && echo OK || echo 'НЕТ СОЕДИНЕНИЯ')"
                 echo "https=$(curl -sS -o /dev/null -w '%{http_code} за %{time_total}s' --max-time 20 https://api.telegram.org/ 2>&1)"
               fi
