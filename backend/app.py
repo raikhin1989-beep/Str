@@ -562,6 +562,11 @@ async def tg_webhook(request: Request):
     if not expected or not pysecrets.compare_digest(got, expected):
         raise HTTPException(status_code=403, detail="forbidden")
 
+    # Отметка нужна, чтобы отличить «Telegram до нас не достучался» от
+    # «никто ничего не писал»: getWebhookInfo этого не различает.
+    with db.get_conn() as conn:
+        db.set_setting(conn, "last_webhook_at", now_iso())
+
     update = await request.json()
     msg = update.get("message") or {}
     text = (msg.get("text") or "").strip()
@@ -642,6 +647,7 @@ def admin_telegram(_: None = Depends(admin_auth)):
         last = conn.execute(
             "SELECT sent_at FROM outbox WHERE sent_at IS NOT NULL"
             " ORDER BY sent_at DESC LIMIT 1").fetchone()
+        last_hook = db.get_setting(conn, "last_webhook_at")
         if not host and not code:
             code = db.new_link_code()
             db.set_setting(conn, "host_link_code", code)
@@ -656,6 +662,7 @@ def admin_telegram(_: None = Depends(admin_auth)):
         "queue_stuck": stuck,
         "queue_sent": sent,
         "last_sent_at": last["sent_at"] if last else None,
+        "last_webhook_at": last_hook or None,
     }
 
 
