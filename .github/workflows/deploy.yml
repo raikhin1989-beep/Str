@@ -198,6 +198,14 @@ jobs:
                 journalctl -u caddy --no-pager -n 60 || true
                 exit 1
               fi
+
+              # Логи Actions в этом окружении недоступны, поэтому итог выпуска
+              # сертификата выкладывается рядом с сайтом: издателя видно снаружи
+              # обычным curl. Данные и так публичны (CT-логи).
+              echo | openssl s_client -connect "$SITE_DOMAIN:443" -servername "$SITE_DOMAIN" 2>/dev/null \
+                | openssl x509 -noout -issuer -subject -dates > /var/www/html/tls-status 2>/dev/null || true
+              printf 'checked_from=server\ndomain=%s\n' "$SITE_DOMAIN" >> /var/www/html/tls-status
+              echo "--- tls-status ---"; cat /var/www/html/tls-status
             fi
 
             echo "=== статус Caddy ==="
