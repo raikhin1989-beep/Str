@@ -1,7 +1,7 @@
 name: Deploy to server
 
-# Деплой пустого веб-приложения на сервер по SSH силами раннеров GitHub.
-# Ставит nginx через apt и отдаёт статическую страницу на порту 80.
+# Деплой статического сайта из каталога site/ на сервер по SSH силами раннеров GitHub.
+# Ставит nginx через apt и отдаёт содержимое site/ на порту 80.
 # Docker не используется (тянуть образы с Docker Hub на этом сервере нестабильно).
 #
 # Секреты репозитория (Settings → Secrets and variables → Actions):
@@ -11,25 +11,74 @@ name: Deploy to server
 #   SERVER_PORT      — порт SSH (по умолчанию 22)                    [опционально]
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
     inputs:
       action:
         description: "Что сделать на сервере"
         type: choice
-        options: [inspect, deploy]
-        default: inspect
+        options: [deploy, inspect]
+        default: deploy
 
 concurrency:
   group: deploy-server
   cancel-in-progress: false
 
 jobs:
-  server:
+  # ── DEPLOY: выложить содержимое site/ на сервер ─────────────────────────────
+  deploy:
+    if: ${{ github.event_name == 'push' || inputs.action == 'deploy' }}
     runs-on: ubuntu-latest
     steps:
-      # ── INSPECT: только осмотреть сервер, ничего не менять ────────────────────
+      - uses: actions/checkout@v4
+
+      - name: Pack site
+        run: |
+          echo "SITE_B64=$(tar -czf - -C site . | base64 -w0)" >> "$GITHUB_ENV"
+
+      - name: Deploy on server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER || 'root' }}
+          password: ${{ secrets.SERVER_PASSWORD }}
+          port: ${{ secrets.SERVER_PORT || 22 }}
+          command_timeout: 5m
+          envs: SITE_B64,GITHUB_SHA
+          script: |
+            set -e
+            export DEBIAN_FRONTEND=noninteractive
+            echo "=== nginx + rsync через apt ==="
+            apt-get update -qq
+            apt-get install -y -qq nginx rsync
+            echo "=== распаковываем сайт ==="
+            rm -rf /tmp/str-site
+            mkdir -p /tmp/str-site /var/www/html
+            echo "$SITE_B64" | base64 -d | tar -xzf - -C /tmp/str-site
+            printf '%s\n' "$GITHUB_SHA" > /tmp/str-site/version
+            rsync -a --delete /tmp/str-site/ /var/www/html/
+            chmod -R a+r /var/www/html
+            echo "=== запускаем nginx ==="
+            systemctl enable nginx >/dev/null 2>&1 || true
+            systemctl restart nginx
+            sleep 1
+            echo "=== health check ==="
+            curl -fsS -o /dev/null http://127.0.0.1/ && echo "index: OK"
+            echo "healthz: $(curl -fsS http://127.0.0.1/healthz)"
+            echo "version: $(curl -fsS http://127.0.0.1/version)"
+            echo "=== nginx status ==="
+            systemctl is-active nginx
+
+  # ── INSPECT: только осмотреть сервер, ничего не менять ──────────────────────
+  inspect:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'inspect' }}
+    runs-on: ubuntu-latest
+    steps:
       - name: Inspect server
-        if: ${{ inputs.action == 'inspect' }}
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SERVER_HOST }}
@@ -43,68 +92,5 @@ jobs:
             echo "=== listening 80/443 ==="; (ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null) | grep -E ':80 |:443 ' || echo "nothing on 80/443"
             echo "=== nginx ==="; (nginx -v 2>&1; systemctl is-active nginx 2>/dev/null) || echo "nginx: NOT installed"
             echo "=== who answers :80 ==="; (curl -sS -i http://127.0.0.1/ 2>&1 | head -8) || true
+            echo "=== version ==="; (cat /var/www/html/version 2>/dev/null) || echo "no version file"
             echo "=== disk ==="; df -h / | tail -1
-
-      # ── DEPLOY: поставить nginx через apt и выложить страницу на :80 ──────────
-      - name: Deploy on server
-        if: ${{ inputs.action == 'deploy' }}
-        uses: appleboy/ssh-action@v1.2.0
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER || 'root' }}
-          password: ${{ secrets.SERVER_PASSWORD }}
-          port: ${{ secrets.SERVER_PORT || 22 }}
-          command_timeout: 5m
-          script: |
-            set -e
-            export DEBIAN_FRONTEND=noninteractive
-            echo "=== установка nginx через apt ==="
-            apt-get update -qq
-            apt-get install -y -qq nginx
-            echo "=== выкладываем страницу ==="
-            mkdir -p /var/www/html
-            cat > /var/www/html/index.html <<'HTML'
-            <!doctype html>
-            <html lang="ru">
-            <head>
-              <meta charset="utf-8" />
-              <meta name="viewport" content="width=device-width, initial-scale=1" />
-              <meta name="robots" content="noindex" />
-              <title>Str — приложение готовится</title>
-              <style>
-                html,body{height:100%;margin:0}
-                body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
-                  background:radial-gradient(1200px 600px at 50% -10%,#1b2030 0%,#0f1117 60%);
-                  color:#e7eaf0;display:flex;align-items:center;justify-content:center;padding:24px}
-                .card{max-width:560px;background:#171a23;border:1px solid #262b38;border-radius:16px;
-                  padding:40px 36px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
-                .badge{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#9aa3b2;
-                  border:1px solid #262b38;border-radius:999px;padding:6px 12px;margin-bottom:20px}
-                .dot{width:8px;height:8px;border-radius:50%;background:#35d07f;
-                  box-shadow:0 0 0 3px rgba(53,208,127,.15)}
-                h1{font-size:28px;margin:0 0 10px}
-                p{color:#9aa3b2;line-height:1.6;margin:0 0 8px}
-                code{background:#0d0f16;border:1px solid #262b38;border-radius:6px;padding:2px 6px;font-size:12px}
-              </style>
-            </head>
-            <body>
-              <main class="card">
-                <span class="badge"><span class="dot"></span> Сервис запущен</span>
-                <h1>Str</h1>
-                <p>Пустое веб-приложение развёрнуто и работает. Это стартовая заглушка — реальный функционал появится здесь по мере разработки.</p>
-                <p>Проверка доступности: <code>/healthz</code> → <code>ok</code>.</p>
-              </main>
-            </body>
-            </html>
-            HTML
-            printf 'ok\n' > /var/www/html/healthz
-            echo "=== запускаем nginx ==="
-            systemctl enable nginx >/dev/null 2>&1 || true
-            systemctl restart nginx
-            sleep 1
-            echo "=== health check ==="
-            curl -sS -i http://127.0.0.1/ | head -5 || true
-            echo "--- /healthz ---"
-            curl -sS http://127.0.0.1/healthz || true
-            echo "=== nginx status ==="
-            systemctl is-active nginx

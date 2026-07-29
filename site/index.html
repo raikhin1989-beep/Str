@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Str — приложение готовится</title>
+  <style>
+    html,body{height:100%;margin:0}
+    body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;
+      background:radial-gradient(1200px 600px at 50% -10%,#1b2030 0%,#0f1117 60%);
+      color:#e7eaf0;display:flex;align-items:center;justify-content:center;padding:24px}
+    .card{max-width:560px;background:#171a23;border:1px solid #262b38;border-radius:16px;
+      padding:40px 36px;box-shadow:0 20px 60px rgba(0,0,0,.35)}
+    .badge{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:#9aa3b2;
+      border:1px solid #262b38;border-radius:999px;padding:6px 12px;margin-bottom:20px}
+    .dot{width:8px;height:8px;border-radius:50%;background:#35d07f;
+      box-shadow:0 0 0 3px rgba(53,208,127,.15)}
+    h1{font-size:28px;margin:0 0 10px}
+    p{color:#9aa3b2;line-height:1.6;margin:0 0 8px}
+    code{background:#0d0f16;border:1px solid #262b38;border-radius:6px;padding:2px 6px;font-size:12px}
+    .meta{margin-top:24px;padding-top:20px;border-top:1px solid #262b38;font-size:12px;color:#6c7484}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <span class="badge"><span class="dot"></span> Сервис запущен</span>
+    <h1>Str</h1>
+    <p>Пустое веб-приложение развёрнуто и работает. Это стартовая заглушка — реальный функционал появится здесь по мере разработки.</p>
+    <p>Проверка доступности: <code>/healthz</code> → <code>ok</code>. Версия сборки: <code>/version</code>.</p>
+    <p class="meta">Страница лежит в репозитории в каталоге <code>site/</code> и раскатывается на сервер автоматически при пуше в <code>main</code>.</p>
+  </main>
+</body>
+</html>
