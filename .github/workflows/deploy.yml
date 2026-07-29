@@ -164,6 +164,17 @@ jobs:
               useradd --system --home-dir /opt/str-api --shell /usr/sbin/nologin strapi
             mkdir -p /opt/str-api/src /opt/str-api/data
 
+            # DNS отдаёт api.telegram.org и по IPv6, но IPv6-связности у
+            # сервера нет — соединение молча уходит в таймаут. Просим glibc
+            # предпочитать IPv4. Файл читается процессом при старте, поэтому
+            # правка обязана быть до перезапуска str-api.
+            if ! grep -q '^precedence ::ffff:0:0/96  100' /etc/gai.conf 2>/dev/null; then
+              echo 'precedence ::ffff:0:0/96  100' >> /etc/gai.conf
+              echo "gai.conf: включено предпочтение IPv4"
+            else
+              echo "gai.conf: предпочтение IPv4 уже включено"
+            fi
+
             echo "=== освобождаем порты 80/443 от nginx ==="
             systemctl disable --now nginx >/dev/null 2>&1 || true
 
@@ -278,7 +289,9 @@ jobs:
                 echo "token=не задан"
               else
                 echo "token=задан"
-                echo "dns=$(getent hosts api.telegram.org 2>/dev/null | head -1 || echo 'НЕ РЕЗОЛВИТСЯ')"
+                echo "dns_default=$(getent hosts api.telegram.org 2>/dev/null | head -1 || echo 'НЕ РЕЗОЛВИТСЯ')"
+                echo "dns_ipv4=$(getent ahostsv4 api.telegram.org 2>/dev/null | head -1 || echo 'НЕТ A-ЗАПИСИ')"
+                echo "https_ipv4=$(curl -4 -sS -o /dev/null -w '%{http_code} за %{time_total}s' --max-time 20 https://api.telegram.org/ 2>&1)"
                 echo "tcp443=$(timeout 10 bash -c 'exec 3<>/dev/tcp/api.telegram.org/443' 2>&1 && echo OK || echo 'НЕТ СОЕДИНЕНИЯ')"
                 echo "https=$(curl -sS -o /dev/null -w '%{http_code} за %{time_total}s' --max-time 20 https://api.telegram.org/ 2>&1)"
               fi
@@ -288,10 +301,10 @@ jobs:
               SEC=/opt/str-api/data/tg_webhook_secret
               [ -s "$SEC" ] || openssl rand -hex 32 > "$SEC"
               chmod 600 "$SEC"; chown strapi:strapi "$SEC"
-              me=$(curl -sS --max-time 25 "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe" 2>&1 || true)
+              me=$(curl -4 -sS --max-time 25 "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getMe" 2>&1 || true)
               if printf '%s' "$me" | grep -q '"ok":true'; then
                 echo "getMe=$(printf '%s' "$me" | grep -o '"username":"[^"]*"' | head -1)" >> "$TGS"
-                hook=$(curl -sS --max-time 25 \
+                hook=$(curl -4 -sS --max-time 25 \
                   "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
                   --data-urlencode "url=https://$SITE_DOMAIN/api/tg/webhook" \
                   --data-urlencode "secret_token=$(cat $SEC)" \
