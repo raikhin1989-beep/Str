@@ -91,6 +91,8 @@ class RsvpIn(BaseModel):
     hype: int = Field(default=7, ge=1, le=10)
     allergies: str = Field(default="", max_length=200)
     message: str = Field(default="", max_length=500)
+    # Гость приносит свой напиток — его компанию не закладываем в закупку.
+    brings_own: bool = False
     # Токен своей записи, если гость уже отправлял форму с этого браузера.
     token: str | None = Field(default=None, max_length=64)
     # Ловушка для ботов: поле спрятано в вёрстке, человек его не заполнит.
@@ -205,6 +207,7 @@ def _row_to_own(row) -> dict:
         "hype": row["hype"],
         "allergies": row["allergies"],
         "message": row["message"],
+        "brings_own": bool(row["brings_own"]),
     }
 
 
@@ -248,9 +251,10 @@ def submit(data: RsvpIn, request: Request):
         if existing is not None:
             conn.execute(
                 "UPDATE guests SET name=?, guests_count=?, drink=?, hype=?,"
-                " allergies=?, message=?, updated_at=? WHERE id=?",
+                " allergies=?, message=?, brings_own=?, updated_at=? WHERE id=?",
                 (data.name, data.guests_count, data.drink, data.hype,
-                 data.allergies, data.message, ts, existing["id"]),
+                 data.allergies, data.message, int(data.brings_own), ts,
+                 existing["id"]),
             )
             return {"ok": True, "token": existing["token"], "updated": True}
 
@@ -269,10 +273,10 @@ def submit(data: RsvpIn, request: Request):
         token = db.new_token()
         conn.execute(
             "INSERT INTO guests(token, name, guests_count, drink, hype,"
-            " allergies, message, ip_hash, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " allergies, message, brings_own, ip_hash, created_at, updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (token, data.name, data.guests_count, data.drink, data.hype,
-             data.allergies, data.message, ip, ts, ts),
+             data.allergies, data.message, int(data.brings_own), ip, ts, ts),
         )
     return {"ok": True, "token": token, "updated": False}
 
@@ -290,6 +294,7 @@ ADMIN_FIELDS = [
     ("hype", "Готовность"),
     ("allergies", "Аллергии"),
     ("message", "Сообщение"),
+    ("brings_own", "Своё"),
     ("created_at", "Записался"),
     ("updated_at", "Обновлено"),
 ]
@@ -372,3 +377,103 @@ def admin_delete(guest_id: int, _: None = Depends(admin_auth)):
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Запись не найдена")
     return {"ok": True}
+
+
+# ── КАЛЬКУЛЯТОР БАРА ────────────────────────────────────────────────────────
+# Нормы на одного человека на вечер примерно в пять часов. Это оценка, а не
+# истина: цифры собраны в одном месте и показываются в админке, чтобы их
+# можно было осознанно подкрутить, а не гадать, откуда взялось «4 бутылки».
+BOTTLE = ("бутылка", "бутылки", "бутылок")
+LITRE = ("литр", "литра", "литров")
+
+BAR_NORMS = {
+    "Виски":          {"ml": 300,  "bottle": 700,  "forms": BOTTLE, "size": "0,7 л"},
+    "Вино":           {"ml": 500,  "bottle": 750,  "forms": BOTTLE, "size": "0,75 л"},
+    "Пиво":           {"ml": 1500, "bottle": 500,  "forms": BOTTLE, "size": "0,5 л"},
+    "Коктейль":       {"ml": 250,  "bottle": 700,  "forms": BOTTLE, "size": "крепкого 0,7 л"},
+    "Безалкогольное": {"ml": 1500, "bottle": 1000, "forms": LITRE,  "size": ""},
+}
+
+
+def plural(n: int, forms: tuple[str, str, str]) -> str:
+    """Русское склонение: 1 бутылка, 2 бутылки, 5 бутылок."""
+    n = abs(n)
+    if n % 10 == 1 and n % 100 != 11:
+        return forms[0]
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return forms[1]
+    return forms[2]
+
+
+def unit_label(amount: int, norm: dict) -> str:
+    word = plural(amount, norm["forms"])
+    return f"{word} {norm['size']}".strip()
+# Сок и тоник к коктейлям — считаются отдельной строкой.
+MIXER_ML_PER_PERSON = 750
+
+
+@app.get("/api/admin/bar")
+def admin_bar(_: None = Depends(admin_auth)):
+    """Закупочный список.
+
+    Считаем по головам, а не по заявкам: если человек привёл компанию, весь
+    его выбор умножается на размер компании. Что пьют спутники, форма не
+    спрашивает, поэтому предположение сознательно щедрое — на празднике
+    лучше остаться с лишней бутылкой, чем без.
+    """
+    rows = _all_guests()
+
+    by_drink: dict[str, int] = {}
+    bring_own_people = 0
+    people_total = 0
+
+    for r in rows:
+        n = r["guests_count"]
+        people_total += n
+        if r["brings_own"]:
+            bring_own_people += n
+            continue
+        by_drink[r["drink"]] = by_drink.get(r["drink"], 0) + n
+
+    shopping, custom = [], []
+    for drink, people in sorted(by_drink.items(), key=lambda kv: -kv[1]):
+        norm = BAR_NORMS.get(drink)
+        if norm is None:
+            # Свой вариант гостя: нормы для произвольного текста нет,
+            # поэтому такие позиции выносим списком, а не выдумываем объём.
+            custom.append({"drink": drink, "people": people})
+            continue
+        volume = norm["ml"] * people
+        amount = -(-volume // norm["bottle"])  # округление вверх
+        shopping.append({
+            "drink": drink,
+            "people": people,
+            "volume_l": round(volume / 1000, 1),
+            "amount": amount,
+            "label": unit_label(amount, norm),
+        })
+
+    cocktail_people = by_drink.get("Коктейль", 0)
+    if cocktail_people:
+        mixer = MIXER_ML_PER_PERSON * cocktail_people
+        litres = -(-mixer // 1000)
+        shopping.append({
+            "drink": "Соки и тоники к коктейлям",
+            "people": cocktail_people,
+            "volume_l": round(mixer / 1000, 1),
+            "amount": litres,
+            "label": plural(litres, LITRE),
+        })
+
+    return {
+        "people_total": people_total,
+        "people_counted": people_total - bring_own_people,
+        "people_bring_own": bring_own_people,
+        "shopping": shopping,
+        "custom": custom,
+        "norms": [
+            {"drink": d, "per_person_ml": n["ml"],
+             "label": unit_label(2, n)}
+            for d, n in BAR_NORMS.items()
+        ],
+    }

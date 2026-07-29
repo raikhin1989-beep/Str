@@ -40,6 +40,12 @@ MIGRATIONS = [
         CREATE INDEX idx_guests_created ON guests(created_at);
         """,
     ),
+    (
+        "002_brings_own",
+        # Гость может принести свой напиток — тогда его компанию не нужно
+        # закладывать в закупку.
+        "ALTER TABLE guests ADD COLUMN brings_own INTEGER NOT NULL DEFAULT 0;",
+    ),
 ]
 
 

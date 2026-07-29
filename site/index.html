@@ -396,6 +396,27 @@
     font-family: var(--font-body);
   }
   .field textarea { resize: vertical; min-height: 84px; line-height: 1.5; }
+  /* Чекбокс не наследует стили полей ввода — раскладываем вручную. */
+  .field label.check {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 12px 0 0;
+    text-transform: none;
+    letter-spacing: normal;
+    font-family: var(--font-body);
+    font-size: 14px;
+    color: var(--paper-cream);
+    opacity: 0.85;
+    cursor: pointer;
+  }
+  .field label.check input {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    accent-color: var(--cska-red);
+    cursor: pointer;
+  }
   .field input:focus, .field select:focus, .field textarea:focus {
     outline: 2px solid var(--hero-gold);
     outline-offset: 1px;
@@ -750,6 +771,10 @@
           <option value="other">Свой вариант</option>
         </select>
         <input type="text" id="drink-other" placeholder="Напишите свой вариант" style="margin-top:8px; display:none;">
+        <label class="check">
+          <input type="checkbox" id="brings-own">
+          <span>Принесу своё — на меня закупать не нужно</span>
+        </label>
       </div>
 
       <div class="field">
@@ -871,6 +896,7 @@
   const allergies = document.getElementById('allergies');
   const message = document.getElementById('message');
   const website = document.getElementById('website');
+  const bringsOwn = document.getElementById('brings-own');
 
   const KNOWN_DRINKS = ['Виски', 'Вино', 'Пиво', 'Коктейль', 'Безалкогольное'];
 
@@ -964,6 +990,7 @@
       allergies.value = g.allergies || '';
       message.value = g.message || '';
       hypeInput.value = g.hype;
+      bringsOwn.checked = !!g.brings_own;
       renderHype();
       if (KNOWN_DRINKS.includes(g.drink)) {
         drinkSelect.value = g.drink;
@@ -997,6 +1024,7 @@
       hype: parseInt(hypeInput.value, 10),
       allergies: allergies.value.trim(),
       message: message.value.trim(),
+      brings_own: bringsOwn.checked,
       token: localStorage.getItem(TOKEN_KEY),
       website: website.value
     };

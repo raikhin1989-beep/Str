@@ -51,6 +51,14 @@
   }
   .act button.del:hover { background: var(--red); border-color: var(--red); }
   .empty { padding: 40px; text-align: center; opacity: 0.5; }
+  .h2 { font-size: 16px; margin: 28px 0 10px; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.8; }
+  #bar-table { min-width: 520px; }
+  #bar-table td.buy { color: var(--gold); font-weight: 700; white-space: nowrap; }
+  .bar-note { font-size: 13px; opacity: 0.65; margin-bottom: 12px; line-height: 1.5; }
+  .norms { font-size: 12px; opacity: 0.6; margin-bottom: 8px; }
+  .norms summary { cursor: pointer; }
+  .norms div { padding: 10px 0 0 4px; line-height: 1.7; }
+  .custom { color: var(--gold); }
   .err { background: rgba(211,17,69,0.2); border: 1px solid var(--red); border-radius: 10px; padding: 14px; margin-bottom: 18px; display: none; }
 </style>
 </head>
@@ -68,12 +76,28 @@
     <button class="btn ghost" id="reload">Обновить</button>
   </div>
 
+  <h2 class="h2">Закупка бара</h2>
+  <div class="bar-note" id="bar-note"></div>
+  <div class="table-scroll" style="margin-bottom:12px">
+    <table id="bar-table">
+      <thead>
+        <tr><th>Позиция</th><th>Человек</th><th>Объём</th><th>Купить</th></tr>
+      </thead>
+      <tbody id="bar-rows"></tbody>
+    </table>
+  </div>
+  <details class="norms">
+    <summary>Из чего считается</summary>
+    <div id="norms"></div>
+  </details>
+
+  <h2 class="h2">Заявки</h2>
   <div class="table-scroll">
     <table>
       <thead>
         <tr>
           <th>#</th><th>Имя</th><th>В списке</th><th>Гостей</th><th>Напиток</th>
-          <th>Готовность</th><th>Аллергии</th><th>Сообщение</th><th>Записался</th><th></th>
+          <th>Готовность</th><th>Аллергии</th><th>Сообщение</th><th>Своё</th><th>Записался</th><th></th>
         </tr>
       </thead>
       <tbody id="rows"></tbody>
@@ -99,6 +123,34 @@
     if (!iso) return '';
     const d = new Date(iso);
     return isNaN(d) ? iso : d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+
+  async function loadBar() {
+    let d;
+    try {
+      const res = await fetch('/api/admin/bar');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      d = await res.json();
+    } catch (e) { return showErr('Не удалось посчитать бар: ' + e.message); }
+
+    let note = `Считаем по головам: выбор гостя умножается на размер его компании — что пьют спутники, форма не спрашивает. Из ${d.people_total} человек в расчёт вошли ${d.people_counted}`;
+    note += d.people_bring_own ? `, ещё ${d.people_bring_own} принесут своё.` : '.';
+    document.getElementById('bar-note').textContent = note;
+
+    const rows = d.shopping.map(r => `
+      <tr><td>${esc(r.drink)}</td><td class="num">${esc(r.people)}</td>
+          <td>${esc(r.volume_l)} л</td>
+          <td class="buy">${esc(r.amount)} ${esc(r.label)}</td></tr>`);
+    for (const c of d.custom) {
+      rows.push(`<tr><td class="custom">${esc(c.drink)}</td><td class="num">${esc(c.people)}</td>
+                 <td colspan="2" class="muted">свой вариант гостя — нормы нет, решить вручную</td></tr>`);
+    }
+    document.getElementById('bar-rows').innerHTML = rows.join('')
+      || '<tr><td colspan="4" class="muted">Пока нечего закупать</td></tr>';
+
+    document.getElementById('norms').innerHTML = d.norms.map(n =>
+      `${esc(n.drink)} — ${esc(n.per_person_ml)} мл на человека, считаем в ${esc(n.label)}`
+    ).join('<br>') + '<br>Соки и тоники — 750 мл на каждого, кто выбрал коктейли.';
   }
 
   async function load() {
@@ -131,6 +183,7 @@
         <td class="num">${esc(g.hype)}</td>
         <td class="allerg">${esc(g.allergies)}</td>
         <td>${esc(g.message)}</td>
+        <td class="num">${g.brings_own ? '✓' : ''}</td>
         <td class="muted">${esc(when(g.created_at))}</td>
         <td><div class="act">
           <button data-rename="${esc(g.id)}" data-name="${esc(g.name)}">Имя</button>
@@ -147,7 +200,7 @@
       if (!confirm(`Удалить заявку «${btn.dataset.name}»? Это необратимо.`)) return;
       const res = await fetch('/api/admin/guests/' + btn.dataset.del, { method: 'DELETE' });
       if (!res.ok) return showErr('Не удалось удалить: HTTP ' + res.status);
-      load();
+      loadAll();
     }
 
     if (btn.dataset.rename) {
@@ -161,12 +214,13 @@
         body: JSON.stringify({ name: name })
       });
       if (!res.ok) return showErr('Не удалось переименовать: HTTP ' + res.status);
-      load();
+      loadAll();
     }
   });
 
-  document.getElementById('reload').addEventListener('click', load);
-  load();
+  function loadAll() { load(); loadBar(); }
+  document.getElementById('reload').addEventListener('click', loadAll);
+  loadAll();
 </script>
 </body>
 </html>
