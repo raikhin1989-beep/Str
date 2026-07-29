@@ -145,12 +145,31 @@ async def validation_handler(request: Request, exc: RequestValidationError):
 
 @app.get("/api/health")
 def health():
-    """Проверка живости. Возвращает версию, чтобы было видно,
-    какой коммит реально крутится, а не только что сервис отвечает."""
+    """Проверка живости.
+
+    Версия нужна, чтобы отличать «сервис отвечает» от «отвечает нужный код».
+    Сводка по Telegram — чтобы видеть снаружи, ходит ли задача Actions и не
+    копится ли очередь: логи Actions в этом окружении недоступны. Секретов
+    здесь нет — имя бота и так публично, остальное счётчики и время.
+    """
+    with db.get_conn() as conn:
+        pending = conn.execute(
+            "SELECT count(*) AS n FROM outbox WHERE sent_at IS NULL AND attempts < ?",
+            (MAX_ATTEMPTS,)).fetchone()["n"]
+        last_sent = conn.execute(
+            "SELECT sent_at FROM outbox WHERE sent_at IS NOT NULL"
+            " ORDER BY sent_at DESC LIMIT 1").fetchone()
+        last_poll = db.get_setting(conn, "last_webhook_at")
     return {
         "status": "ok",
         "version": APP_VERSION,
         "uptime_seconds": round(time.time() - STARTED_AT, 1),
+        "telegram": {
+            "bot": BOT_USERNAME,
+            "last_poll_at": last_poll or None,
+            "queue_pending": pending,
+            "last_sent_at": last_sent["sent_at"] if last_sent else None,
+        },
     }
 
 
