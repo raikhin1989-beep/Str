@@ -36,13 +36,14 @@ concurrency:
 
 env:
   # Как получать домен под сертификат:
+  #   fixed   — домен берётся из SITE_DOMAIN_FIXED ниже. A-запись должна вести
+  #             на сервер; секреты не нужны. Это текущий режим.
   #   sslip   — домен выводится из IP сервера (91.212.150.225 → 91-212-150-225.sslip.io).
   #             Регистрация и аккаунт не нужны, Let's Encrypt выдаёт обычный сертификат.
-  #   duckdns — используется <DUCKDNS_SUBDOMAIN>.duckdns.org, поддомен должен быть
-  #             заранее заведён руками на duckdns.org (API для регистрации у них нет),
-  #             а DUCKDNS_SUBDOMAIN и DUCKDNS_TOKEN добавлены в секреты репозитория.
+  #   duckdns — используется <DUCKDNS_SUBDOMAIN>.duckdns.org из секретов.
   #   off     — без TLS, сайт отдаётся только по HTTP на порту 80.
-  TLS_MODE: sslip
+  TLS_MODE: fixed
+  SITE_DOMAIN_FIXED: raikhin.duckdns.org
 
 jobs:
   # ── DEPLOY: выложить содержимое site/ на сервер ─────────────────────────────
@@ -52,6 +53,8 @@ jobs:
     env:
       SERVER_ADDR: ${{ secrets.SERVER_HOST }}
       ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+      # Контекст secrets недоступен в step-level if, поэтому раскрываем его здесь.
+      HAS_DUCKDNS: ${{ secrets.DUCKDNS_SUBDOMAIN != '' && secrets.DUCKDNS_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -68,6 +71,13 @@ jobs:
           set -e
           domain=""
           case "$TLS_MODE" in
+            fixed)
+              if [ -n "$SITE_DOMAIN_FIXED" ]; then
+                domain="$SITE_DOMAIN_FIXED"
+              else
+                echo "::error::TLS_MODE=fixed, но SITE_DOMAIN_FIXED пуст"; exit 1
+              fi
+              ;;
             sslip)
               # Преобразование работает только для IPv4; для имени хоста оно
               # бессмысленно, поэтому в таком случае остаёмся на HTTP.
@@ -91,9 +101,11 @@ jobs:
           echo "домен для сертификата: ${domain:-<нет, только HTTP>}"
 
       # DuckDNS не имеет API для регистрации поддомена — его заводят руками через
-      # веб-интерфейс. Здесь только привязка уже существующего поддомена к IP.
-      - name: Point DuckDNS at the server
-        if: ${{ env.TLS_MODE == 'duckdns' }}
+      # веб-интерфейс. Здесь только обновление IP у уже существующего поддомена.
+      # Шаг не обязателен: если токена в секретах нет, A-запись просто остаётся
+      # такой, какой её выставили руками, и деплой продолжается.
+      - name: Refresh DuckDNS IP
+        if: ${{ env.HAS_DUCKDNS == 'true' }}
         env:
           SUB: ${{ secrets.DUCKDNS_SUBDOMAIN }}
           TOKEN: ${{ secrets.DUCKDNS_TOKEN }}
