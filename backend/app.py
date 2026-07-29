@@ -7,13 +7,18 @@ GET /api/roster — список для всех, с сокращёнными и
 Все маршруты живут под /api/*: Caddy отдаёт этот префикс сюда, а всё
 остальное — статикой из /var/www/html.
 """
+import csv
+import io
 import os
+import secrets as pysecrets
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import FastAPI, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field, field_validator
 
 import db
@@ -37,6 +42,41 @@ FIELD_LABELS = {
     "allergies": "аллергии",
     "message": "сообщение",
 }
+
+
+ADMIN_USER = "admin"
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+BASE_DIR = Path(__file__).resolve().parent
+
+basic = HTTPBasic(auto_error=False)
+
+
+def admin_auth(cred: HTTPBasicCredentials | None = Depends(basic)) -> None:
+    """Пароль приходит из секрета репозитория через systemd.
+
+    Если он не задан, админка не открывается вообще — за ней полные имена
+    гостей, аллергии и личные сообщения, и «временно без пароля» тут
+    неприемлемо. Сравнение через compare_digest, чтобы время ответа не
+    подсказывало подбирающему длину совпавшего префикса.
+    """
+    if not ADMIN_PASSWORD:
+        raise HTTPException(
+            status_code=503,
+            detail="Админка не настроена: не задан секрет ADMIN_PASSWORD.",
+        )
+    if cred is None:
+        raise HTTPException(
+            status_code=401, detail="Нужен пароль",
+            headers={"WWW-Authenticate": 'Basic realm="Str admin"'},
+        )
+    ok = pysecrets.compare_digest(cred.username, ADMIN_USER) & pysecrets.compare_digest(
+        cred.password, ADMIN_PASSWORD
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=401, detail="Неверный пароль",
+            headers={"WWW-Authenticate": 'Basic realm="Str admin"'},
+        )
 
 
 @app.on_event("startup")
@@ -235,3 +275,100 @@ def submit(data: RsvpIn, request: Request):
              data.allergies, data.message, ip, ts, ts),
         )
     return {"ok": True, "token": token, "updated": False}
+
+
+# ── АДМИНКА ─────────────────────────────────────────────────────────────────
+# Всё под /admin и /api/admin/* закрыто паролем. Здесь, в отличие от
+# публичного ростера, отдаются полные данные: имя целиком, аллергии и
+# личные сообщения — ради них поля и добавлялись.
+
+ADMIN_FIELDS = [
+    ("id", "id"),
+    ("name", "Имя"),
+    ("guests_count", "Гостей"),
+    ("drink", "Напиток"),
+    ("hype", "Готовность"),
+    ("allergies", "Аллергии"),
+    ("message", "Сообщение"),
+    ("created_at", "Записался"),
+    ("updated_at", "Обновлено"),
+]
+
+
+class AdminPatch(BaseModel):
+    """Правка имени: гость мог написать фамилию первой, и тогда в публичный
+    список попадала бы именно она."""
+    name: str = Field(min_length=2, max_length=80)
+
+    @field_validator("name")
+    @classmethod
+    def strip_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("пустое имя")
+        return v
+
+
+def _all_guests():
+    with db.get_conn() as conn:
+        return conn.execute(
+            "SELECT * FROM guests ORDER BY created_at, id"
+        ).fetchall()
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page(_: None = Depends(admin_auth)):
+    html = (BASE_DIR / "admin.html").read_text(encoding="utf-8")
+    return HTMLResponse(html, headers={"X-Robots-Tag": "noindex"})
+
+
+@app.get("/api/admin/guests")
+def admin_guests(_: None = Depends(admin_auth)):
+    rows = _all_guests()
+    return {
+        "entries": len(rows),
+        "people": sum(r["guests_count"] for r in rows),
+        "avg_hype": round(sum(r["hype"] for r in rows) / len(rows), 1) if rows else 0,
+        "with_allergies": sum(1 for r in rows if r["allergies"].strip()),
+        "guests": [{k: r[k] for k, _ in ADMIN_FIELDS} for r in rows],
+        "public_preview": [short_name(r["name"]) for r in rows],
+    }
+
+
+@app.get("/api/admin/guests.csv")
+def admin_csv(_: None = Depends(admin_auth)):
+    buf = io.StringIO()
+    # Точка с запятой и BOM — иначе русский Excel открывает файл одной
+    # колонкой и ломает кириллицу.
+    writer = csv.writer(buf, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+    writer.writerow([title for _, title in ADMIN_FIELDS])
+    for r in _all_guests():
+        writer.writerow([r[k] for k, _ in ADMIN_FIELDS])
+    data = "﻿" + buf.getvalue()
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return Response(
+        content=data.encode("utf-8"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="guests-{stamp}.csv"'},
+    )
+
+
+@app.patch("/api/admin/guests/{guest_id}")
+def admin_rename(guest_id: int, patch: AdminPatch, _: None = Depends(admin_auth)):
+    with db.get_conn() as conn:
+        cur = conn.execute(
+            "UPDATE guests SET name = ?, updated_at = ? WHERE id = ?",
+            (patch.name, now_iso(), guest_id),
+        )
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Запись не найдена")
+    return {"ok": True, "name": patch.name, "public": short_name(patch.name)}
+
+
+@app.delete("/api/admin/guests/{guest_id}")
+def admin_delete(guest_id: int, _: None = Depends(admin_auth)):
+    with db.get_conn() as conn:
+        cur = conn.execute("DELETE FROM guests WHERE id = ?", (guest_id,))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Запись не найдена")
+    return {"ok": True}

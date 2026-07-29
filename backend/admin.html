@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>Ростер — админка</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📋</text></svg>">
+<style>
+  :root {
+    --navy: #0c1b3d; --ink: #12141c; --red: #d31145;
+    --gold: #ffc647; --cream: #f5efe0; --line: rgba(245,239,224,0.14);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 64px;
+    background: var(--navy); color: var(--cream);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { opacity: 0.6; font-size: 13px; margin-bottom: 24px; }
+  .sub a { color: var(--gold); }
+
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .card .n { font-size: 28px; font-weight: 700; color: var(--gold); line-height: 1; }
+  .card .c { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.55; margin-top: 8px; }
+
+  .bar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 18px; }
+  .btn {
+    background: var(--gold); color: var(--navy); border: none;
+    padding: 10px 16px; border-radius: 8px; font-size: 13px;
+    font-weight: 700; cursor: pointer; text-decoration: none; display: inline-block;
+  }
+  .btn.ghost { background: transparent; color: var(--cream); border: 1px solid var(--line); }
+
+  .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; font-size: 13px; }
+  th, td { padding: 11px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { background: var(--ink); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; opacity: 0.7; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  td.num { text-align: center; }
+  .public { color: var(--gold); font-size: 12px; white-space: nowrap; }
+  .muted { opacity: 0.5; font-size: 12px; }
+  .allerg { color: #ffb4b4; }
+  .act { display: flex; gap: 6px; }
+  .act button {
+    background: transparent; border: 1px solid var(--line); color: var(--cream);
+    border-radius: 6px; padding: 5px 9px; font-size: 12px; cursor: pointer; white-space: nowrap;
+  }
+  .act button.del:hover { background: var(--red); border-color: var(--red); }
+  .empty { padding: 40px; text-align: center; opacity: 0.5; }
+  .err { background: rgba(211,17,69,0.2); border: 1px solid var(--red); border-radius: 10px; padding: 14px; margin-bottom: 18px; display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Ростер — админка</h1>
+  <div class="sub">Полные данные гостей. Публично видно только то, что в колонке «В списке». · <a href="/">к приглашению</a></div>
+
+  <div class="err" id="err"></div>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="bar">
+    <a class="btn" href="/api/admin/guests.csv">Скачать CSV</a>
+    <button class="btn ghost" id="reload">Обновить</button>
+  </div>
+
+  <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th><th>Имя</th><th>В списке</th><th>Гостей</th><th>Напиток</th>
+          <th>Готовность</th><th>Аллергии</th><th>Сообщение</th><th>Записался</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="empty" style="display:none">Заявок пока нет</div>
+</div>
+
+<script>
+  const rowsEl = document.getElementById('rows');
+  const cardsEl = document.getElementById('cards');
+  const emptyEl = document.getElementById('empty');
+  const errEl = document.getElementById('err');
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+      { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  function showErr(t) { errEl.textContent = t; errEl.style.display = 'block'; }
+
+  function when(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return isNaN(d) ? iso : d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+
+  async function load() {
+    errEl.style.display = 'none';
+    let data;
+    try {
+      const res = await fetch('/api/admin/guests');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      data = await res.json();
+    } catch (e) {
+      showErr('Не удалось загрузить список: ' + e.message);
+      return;
+    }
+
+    cardsEl.innerHTML = [
+      [data.entries, 'заявок'],
+      [data.people, 'человек придёт'],
+      [data.avg_hype, 'средняя готовность'],
+      [data.with_allergies, 'с ограничениями в еде']
+    ].map(([n, c]) => `<div class="card"><div class="n">${esc(n)}</div><div class="c">${esc(c)}</div></div>`).join('');
+
+    emptyEl.style.display = data.guests.length ? 'none' : 'block';
+    rowsEl.innerHTML = data.guests.map((g, i) => `
+      <tr>
+        <td class="muted">${esc(g.id)}</td>
+        <td><b>${esc(g.name)}</b></td>
+        <td class="public">${esc(data.public_preview[i])}</td>
+        <td class="num">${esc(g.guests_count)}</td>
+        <td>${esc(g.drink)}</td>
+        <td class="num">${esc(g.hype)}</td>
+        <td class="allerg">${esc(g.allergies)}</td>
+        <td>${esc(g.message)}</td>
+        <td class="muted">${esc(when(g.created_at))}</td>
+        <td><div class="act">
+          <button data-rename="${esc(g.id)}" data-name="${esc(g.name)}">Имя</button>
+          <button class="del" data-del="${esc(g.id)}" data-name="${esc(g.name)}">Удалить</button>
+        </div></td>
+      </tr>`).join('');
+  }
+
+  rowsEl.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('button');
+    if (!btn) return;
+
+    if (btn.dataset.del) {
+      if (!confirm(`Удалить заявку «${btn.dataset.name}»? Это необратимо.`)) return;
+      const res = await fetch('/api/admin/guests/' + btn.dataset.del, { method: 'DELETE' });
+      if (!res.ok) return showErr('Не удалось удалить: HTTP ' + res.status);
+      load();
+    }
+
+    if (btn.dataset.rename) {
+      // Пригодится, если гость написал фамилию первой: тогда в публичный
+      // список попадает фамилия целиком.
+      const name = prompt('Имя и фамилия (в списке покажется имя + инициал):', btn.dataset.name);
+      if (name === null) return;
+      const res = await fetch('/api/admin/guests/' + btn.dataset.rename, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name })
+      });
+      if (!res.ok) return showErr('Не удалось переименовать: HTTP ' + res.status);
+      load();
+    }
+  });
+
+  document.getElementById('reload').addEventListener('click', load);
+  load();
+</script>
+</body>
+</html>

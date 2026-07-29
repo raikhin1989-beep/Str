@@ -13,6 +13,9 @@ name: Deploy to server
 #   DUCKDNS_SUBDOMAIN  — метка на duckdns.org БЕЗ суффикса            [опционально,
 #   DUCKDNS_TOKEN      — токен с дашборда duckdns.org                  для авто-DNS]
 #   ACME_EMAIL         — почта для уведомлений Let's Encrypt          [опционально]
+#   ADMIN_PASSWORD     — пароль админки /admin, логин admin           [обязательно
+#                        Без него /admin отвечает 503 и не пускает      для /admin]
+#                        никого — за ним полные данные гостей.
 
 on:
   push:
@@ -53,6 +56,7 @@ jobs:
       SERVER_LOGIN: ${{ secrets.SERVER_USER || 'root' }}
       SERVER_SSH_PORT: ${{ secrets.SERVER_PORT || 22 }}
       ACME_EMAIL: ${{ secrets.ACME_EMAIL }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
       # Контекст secrets недоступен в step-level if, поэтому раскрываем его здесь.
       HAS_DUCKDNS: ${{ secrets.DUCKDNS_SUBDOMAIN != '' && secrets.DUCKDNS_TOKEN != '' }}
     steps:
@@ -200,7 +204,7 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT || 22 }}
           command_timeout: 10m
-          envs: GITHUB_SHA,SITE_DOMAIN,SERVER_ADDR,ACME_EMAIL
+          envs: GITHUB_SHA,SITE_DOMAIN,SERVER_ADDR,ACME_EMAIL,ADMIN_PASSWORD
           script: |
             set -e
             printf '%s\n' "$GITHUB_SHA" > /var/www/html/version
@@ -225,6 +229,7 @@ jobs:
             WorkingDirectory=/opt/str-api/src
             Environment=APP_VERSION=$GITHUB_SHA
             Environment=STR_DATA_DIR=/opt/str-api/data
+            Environment="ADMIN_PASSWORD=$ADMIN_PASSWORD"
             ExecStart=/opt/str-api/venv/bin/uvicorn app:app --host 127.0.0.1 --port 8000
             Restart=always
             RestartSec=3
@@ -234,6 +239,8 @@ jobs:
             UNIT
             # Отступы выше нужны YAML-блоку, systemd их не понимает — срезаем.
             sed -i 's/^[[:space:]]*//' /etc/systemd/system/str-api.service
+            # В юните лежит пароль админки, поэтому он не для всех.
+            chmod 600 /etc/systemd/system/str-api.service
 
             chown -R strapi:strapi /opt/str-api
             systemctl daemon-reload
@@ -255,9 +262,12 @@ jobs:
 
             echo "=== пишем Caddyfile ==="
             # /api/* уходит на uvicorn, всё остальное отдаётся статикой.
+            # /admin отдаёт сам бэкенд — он же проверяет пароль. Auth не в
+            # Caddy, чтобы не зависеть от версии директивы basic_auth.
             site_block() {
               printf '%s {\n' "$1"
               printf '\tencode gzip\n'
+              printf '\thandle /admin* {\n\t\treverse_proxy 127.0.0.1:8000\n\t}\n'
               printf '\thandle /api/* {\n\t\treverse_proxy 127.0.0.1:8000\n\t}\n'
               printf '\thandle {\n\t\troot * /var/www/html\n\t\tfile_server\n\t}\n'
               printf '}\n\n'
