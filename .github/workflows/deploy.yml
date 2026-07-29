@@ -171,8 +171,16 @@ jobs:
           # Отдельно спрашиваем, доходят ли до нас входящие: если Telegram
           # не может достучаться до сервера, здесь будет last_error_message.
           info=$(curl -sS --max-time 25 "https://api.telegram.org/bot$TOKEN/getWebhookInfo" 2>&1 || true)
-          err=$(printf '%s' "$info" | grep -o '"last_error_message":"[^"]*"' | head -1)
-          echo "TG_HOOKINFO=${err:-без ошибок доставки}" >> "$GITHUB_ENV"
+          # Полная картина: ошибка доставки, когда она была и сколько
+          # обновлений скопилось. Свежая ошибка + растущая очередь означают,
+          # что Telegram до нас не достучаться, и вебхук надо менять на опрос.
+          err=$(printf '%s' "$info" | grep -o '"last_error_message":"[^"]*"' | cut -d'"' -f4)
+          when=$(printf '%s' "$info" | grep -o '"last_error_date":[0-9]*' | cut -d: -f2)
+          pend=$(printf '%s' "$info" | grep -o '"pending_update_count":[0-9]*' | cut -d: -f2)
+          human=""
+          [ -n "$when" ] && human=$(date -u -d "@$when" '+%d.%m %H:%M UTC' 2>/dev/null)
+          echo "TG_HOOKINFO=ошибка='${err:-нет}' когда='${human:-—}' в_очереди_у_telegram=${pend:-0}" >> "$GITHUB_ENV"
+          echo "getWebhookInfo: ошибка='${err:-нет}' когда='${human:-—}' pending=${pend:-0}"
 
       # Пакеты ставятся отдельным шагом до заливки файлов: rsync нужен на
       # сервере раньше, чем мы попробуем в него синхронизировать сайт.
