@@ -90,6 +90,12 @@ MIGRATIONS = [
         # задача по расписанию отработает дважды.
         "ALTER TABLE guests ADD COLUMN reminded_at TEXT;",
     ),
+    (
+        "006_track",
+        # Трек «на разминку»: гость называет одну песню, которая обязательно
+        # должна прозвучать.
+        "ALTER TABLE guests ADD COLUMN track TEXT NOT NULL DEFAULT '';",
+    ),
 ]
 
 

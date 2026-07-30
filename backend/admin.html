@@ -88,6 +88,9 @@
   <h2 class="h2">Напоминание за два дня</h2>
   <div class="tg" id="rem"></div>
 
+  <h2 class="h2">Плейлист</h2>
+  <div class="tg" id="pl"></div>
+
   <h2 class="h2">Ограничения в еде</h2>
   <div class="tg" id="allerg"></div>
 
@@ -243,6 +246,26 @@
     });
   }
 
+  async function loadPlaylist() {
+    const el = document.getElementById('pl');
+    let d;
+    try {
+      const res = await fetch('/api/admin/playlist');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      d = await res.json();
+    } catch (e) { el.innerHTML = '<span class="bad">Не удалось: ' + esc(e.message) + '</span>'; return; }
+    if (!d.count) { el.innerHTML = '<span class="muted">Треков пока не заказывали.</span>'; return; }
+    el.innerHTML = `Заказано треков: <b>${esc(d.count)}</b><br>`
+      + d.items.map(i => `<b>${esc(i.name)}</b>: ${esc(i.track)}`).join('<br>')
+      + '<br><button class="btn ghost" id="pl-copy" style="margin-top:10px">Скопировать список</button>';
+
+    document.getElementById('pl-copy').addEventListener('click', async (ev) => {
+      try { await navigator.clipboard.writeText(d.plain); ev.target.textContent = 'Скопировано ✓'; }
+      catch (e) { ev.target.textContent = 'Не вышло — выделите вручную'; }
+      setTimeout(() => { ev.target.textContent = 'Скопировать список'; }, 2000);
+    });
+  }
+
   async function loadAllergies() {
     const el = document.getElementById('allerg');
     let d;
@@ -349,7 +372,7 @@
     }
   });
 
-  function loadAll() { load(); loadSysinfo(); loadBar(); loadTelegram(); loadReminders(); loadAllergies(); }
+  function loadAll() { load(); loadSysinfo(); loadBar(); loadTelegram(); loadReminders(); loadPlaylist(); loadAllergies(); }
   document.getElementById('reload').addEventListener('click', loadAll);
   loadAll();
 </script>

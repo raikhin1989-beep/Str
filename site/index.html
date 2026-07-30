@@ -668,6 +668,29 @@
     cursor: pointer;
   }
 
+  .playlist { display: flex; flex-direction: column; gap: 8px; }
+  .track-row {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    background: rgba(245,239,224,0.05);
+    border: 1px solid var(--line-white);
+    border-radius: 10px;
+    padding: 11px 14px;
+    font-size: 14px;
+  }
+  .track-row .who {
+    flex: none;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--hero-gold);
+    opacity: 0.85;
+    min-width: 92px;
+  }
+  .track-row .what { line-height: 1.4; }
+
   .note {
     text-align: center;
     font-size: 12px;
@@ -869,6 +892,12 @@
       </div>
 
       <div class="field">
+        <label for="track">Трек на разминку</label>
+        <input type="text" id="track" placeholder="Исполнитель — название" maxlength="120">
+        <div class="hint">Одна песня, которая обязательно должна прозвучать. Попадёт в общий плейлист ниже.</div>
+      </div>
+
+      <div class="field">
         <label for="hype">Готовность угарать</label>
         <input type="range" id="hype" min="1" max="10" value="7">
         <div class="hype-value" id="hype-value">7 / 10</div>
@@ -915,6 +944,16 @@
         <div class="roster-empty">Пока пусто — станьте первым в составе</div>
       </div>
       <div class="roster-count" id="roster-count"></div>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-head">
+      <span class="tag">Разминка</span>
+      <h2>Плейлист</h2>
+    </div>
+    <div class="playlist" id="playlist">
+      <div class="roster-empty">Пока пусто — закажите первый трек в форме выше</div>
     </div>
   </div>
 
@@ -999,6 +1038,7 @@
   const message = document.getElementById('message');
   const website = document.getElementById('website');
   const bringsOwn = document.getElementById('brings-own');
+  const track = document.getElementById('track');
   const offlineMsg = document.getElementById('offline-msg');
 
   const KNOWN_DRINKS = ['Виски', 'Вино', 'Пиво', 'Коктейль', 'Безалкогольное'];
@@ -1110,6 +1150,25 @@
   checkBackend();
   loadRoster();
 
+  async function loadPlaylist() {
+    const el = document.getElementById('playlist');
+    try {
+      const res = await fetch('/api/playlist');
+      if (!res.ok) throw new Error('bad status');
+      const d = await res.json();
+      if (!d.tracks.length) {
+        el.innerHTML = '<div class="roster-empty">Пока пусто — закажите первый трек в форме выше</div>';
+        return;
+      }
+      el.innerHTML = d.tracks.map(x =>
+        '<div class="track-row"><div class="who">' + esc(x.name) + '</div>'
+        + '<div class="what">' + esc(x.track) + '</div></div>').join('');
+    } catch (e) {
+      el.innerHTML = '<div class="roster-empty">Не удалось загрузить плейлист</div>';
+    }
+  }
+  loadPlaylist();
+
   function showError(text) {
     errorMsg.textContent = text;
     errorMsg.style.display = 'block';
@@ -1137,6 +1196,7 @@
       message.value = g.message || '';
       hypeInput.value = g.hype;
       bringsOwn.checked = !!g.brings_own;
+      track.value = g.track || '';
       renderHype();
       if (KNOWN_DRINKS.includes(g.drink)) {
         drinkSelect.value = g.drink;
@@ -1172,6 +1232,7 @@
       allergies: allergies.value.trim(),
       message: message.value.trim(),
       brings_own: bringsOwn.checked,
+      track: track.value.trim(),
       token: localStorage.getItem(TOKEN_KEY),
       website: website.value
     };
@@ -1203,6 +1264,7 @@
       submitBtn.textContent = 'Сохранить изменения';
       showMyLink(data.token);
       loadRoster();
+      loadPlaylist();
       // Диплинк собирается из кода записи, поэтому забираем её свежей.
       fetch('/api/rsvp?token=' + encodeURIComponent(data.token))
         .then(r => r.ok ? r.json() : null)

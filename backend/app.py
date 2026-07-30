@@ -46,6 +46,7 @@ FIELD_LABELS = {
     "hype": "готовность угарать",
     "allergies": "аллергии",
     "message": "сообщение",
+    "track": "трек",
 }
 
 
@@ -98,12 +99,14 @@ class RsvpIn(BaseModel):
     message: str = Field(default="", max_length=500)
     # Гость приносит свой напиток — его компанию не закладываем в закупку.
     brings_own: bool = False
+    # Одна песня «на разминку». Длина с запасом на «Исполнитель — Название».
+    track: str = Field(default="", max_length=120)
     # Токен своей записи, если гость уже отправлял форму с этого браузера.
     token: str | None = Field(default=None, max_length=64)
     # Ловушка для ботов: поле спрятано в вёрстке, человек его не заполнит.
     website: str = Field(default="", max_length=200)
 
-    @field_validator("name", "drink", "allergies", "message", mode="before")
+    @field_validator("name", "drink", "allergies", "message", "track", mode="before")
     @classmethod
     def strip(cls, v):
         return v.strip() if isinstance(v, str) else v
@@ -253,6 +256,7 @@ def _row_to_own(row) -> dict:
         "allergies": row["allergies"],
         "message": row["message"],
         "brings_own": bool(row["brings_own"]),
+        "track": row["track"],
         "link_code": row["link_code"],
         "tg_linked": bool(row["tg_chat_id"]),
     }
@@ -307,10 +311,11 @@ def submit(data: RsvpIn, request: Request):
         if existing is not None:
             conn.execute(
                 "UPDATE guests SET name=?, guests_count=?, drink=?, hype=?,"
-                " allergies=?, message=?, brings_own=?, updated_at=? WHERE id=?",
+                " allergies=?, message=?, brings_own=?, track=?, updated_at=?"
+                " WHERE id=?",
                 (data.name, data.guests_count, data.drink, data.hype,
-                 data.allergies, data.message, int(data.brings_own), ts,
-                 existing["id"]),
+                 data.allergies, data.message, int(data.brings_own),
+                 data.track, ts, existing["id"]),
             )
             return {"ok": True, "token": existing["token"], "updated": True}
 
@@ -329,11 +334,11 @@ def submit(data: RsvpIn, request: Request):
         token = db.new_token()
         conn.execute(
             "INSERT INTO guests(token, name, guests_count, drink, hype,"
-            " allergies, message, brings_own, link_code, ip_hash,"
+            " allergies, message, brings_own, track, link_code, ip_hash,"
             " created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (token, data.name, data.guests_count, data.drink, data.hype,
-             data.allergies, data.message, int(data.brings_own),
+             data.allergies, data.message, int(data.brings_own), data.track,
              db.new_link_code(), ip, ts, ts),
         )
 
@@ -360,6 +365,7 @@ ADMIN_FIELDS = [
     ("allergies", "Аллергии"),
     ("message", "Сообщение"),
     ("brings_own", "Своё"),
+    ("track", "Трек"),
     ("created_at", "Записался"),
     ("updated_at", "Обновлено"),
 ]
@@ -894,6 +900,22 @@ def tg_updates(payload: TgUpdates, _: None = Depends(admin_auth)):
 # Генератор — scripts/make_ics.py, Content-Type принудительно задан в Caddy.
 
 
+@app.get("/api/admin/playlist")
+def admin_playlist(_: None = Depends(admin_auth)):
+    """Плейлист с полными именами плюс готовая к копированию простыня —
+    её удобно вставить в поиск музыкального сервиса одним куском."""
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT name, track FROM guests WHERE trim(track) != ''"
+            " ORDER BY created_at, id"
+        ).fetchall()
+    return {
+        "count": len(rows),
+        "items": [{"name": r["name"], "track": r["track"]} for r in rows],
+        "plain": "\n".join(r["track"] for r in rows),
+    }
+
+
 @app.get("/api/admin/allergies")
 def admin_allergies(_: None = Depends(admin_auth)):
     """Ограничения в еде отдельным списком — с ним идут к кейтерингу,
@@ -907,4 +929,19 @@ def admin_allergies(_: None = Depends(admin_auth)):
         "count": len(rows),
         "items": [{"name": r["name"], "guests_count": r["guests_count"],
                    "allergies": r["allergies"]} for r in rows],
+    }
+
+
+@app.get("/api/playlist")
+def playlist():
+    """Плейлист «на разминку» — публичный: половина удовольствия в том,
+    чтобы увидеть, кто что заказал. Имя сокращённое, как и в ростере."""
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT name, track FROM guests WHERE trim(track) != ''"
+            " ORDER BY created_at, id"
+        ).fetchall()
+    return {
+        "count": len(rows),
+        "tracks": [{"name": short_name(r["name"]), "track": r["track"]} for r in rows],
     }
