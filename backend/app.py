@@ -680,7 +680,7 @@ def _handle_start(chat_id: str, username: str, code: str) -> None:
         name = row["name"].split()[0] if row["name"].split() else "друг"
 
     enqueue(chat_id, f"{name}, вы в составе! 🏀\n\nНапомню за два дня до "
-                     "праздника — 22 августа, 16:00, CleverLOFT у метро Тульская.\n\n"
+                     "праздника — 22 августа, 17:00, CleverLOFT у метро Тульская.\n\n"
                      "Отключить: /stop", "linked")
 
 
@@ -777,14 +777,14 @@ def outbox_ack(ack: OutboxAck, _: None = Depends(admin_auth)):
 # Время события задано с явным смещением: Москва круглый год UTC+3, поэтому
 # фиксированный сдвиг корректен и не тянет зависимость от базы часовых поясов.
 MSK = timezone(timedelta(hours=3))
-EVENT_AT = datetime(2026, 8, 22, 16, 0, tzinfo=MSK)
+EVENT_AT = datetime(2026, 8, 22, 17, 0, tzinfo=MSK)
 REMIND_BEFORE = timedelta(days=2)
 
 
 def reminder_text(row) -> str:
     name = row["name"].split()[0] if row["name"].split() else "Друг"
     return (f"{name}, послезавтра играем! 🏀\n\n"
-            "<b>22 августа, 16:00</b>, CleverLOFT — Холодильный пер., 3.\n"
+            "<b>22 августа, 17:00</b>, CleverLOFT — Холодильный пер., 3.\n"
             "2 минуты от метро Тульская.\n"
             "Дресс-код: нарядно плюс один геройский акцент.\n\n"
             f"Поменять ответ: {SITE_URL}")

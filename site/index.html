@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Александр — 37. Матч всех звёзд</title>
-<meta name="description" content="22 августа, 16:00, CleverLOFT у метро Тульская. Юбилейный сезон Александра Раихина — явка строго обязательна.">
+<meta name="description" content="22 августа, 17:00, CleverLOFT у метро Тульская. Юбилейный сезон Александра Раихина — явка строго обязательна.">
 <meta name="theme-color" content="#0c1b3d">
 <meta name="robots" content="noindex">
 
@@ -14,14 +14,14 @@
      чтобы превью не разъезжалось с приглашением. -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Александр — 37. Матч всех звёзд">
-<meta property="og:description" content="22 августа, 16:00, CleverLOFT у метро Тульская. Явка строго обязательна.">
+<meta property="og:description" content="22 августа, 17:00, CleverLOFT у метро Тульская. Явка строго обязательна.">
 <meta property="og:url" content="https://raikhin.duckdns.org/">
 <meta property="og:locale" content="ru_RU">
 <meta property="og:image" content="https://raikhin.duckdns.org/og.png">
 <meta property="og:image:type" content="image/png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="Александр Раихин — 37, матч всех звёзд. 22 августа, 16:00, CleverLOFT">
+<meta property="og:image:alt" content="Александр Раихин — 37, матч всех звёзд. 22 августа, 17:00, CleverLOFT">
 <meta name="twitter:card" content="summary_large_image">
 
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏀</text></svg>">
@@ -806,7 +806,7 @@
       </div>
       <div class="stat-tile">
         <div class="cap">Время</div>
-        <div class="val">16:00</div>
+        <div class="val">17:00</div>
       </div>
       <div class="stat-tile red">
         <div class="cap">Площадка</div>
@@ -1059,9 +1059,9 @@
 <script>
   // ---------- Countdown ----------
   // Абсолютный момент с указанием пояса. Прежний вариант
-  // new Date(2026, 7, 22, 16, 0, 0) означал «16:00 по часам гостя»,
+  // new Date(2026, 7, 22, 17, 0, 0) означал «17:00 по часам гостя»,
   // и у любого не в Москве отсчёт врал бы на разницу поясов.
-  const target = new Date('2026-08-22T16:00:00+03:00').getTime();
+  const target = new Date('2026-08-22T17:00:00+03:00').getTime();
 
   function updateClock() {
     const now = Date.now();
@@ -1420,8 +1420,8 @@
       }
       localStorage.setItem(TOKEN_KEY, data.token);
       confirmMsg.textContent = data.updated
-        ? 'Изменения сохранены. До встречи 22 августа в 16:00 🏀'
-        : 'Готово! Вы в стартовом составе. До встречи 22 августа в 16:00 в CleverLOFT 🏀';
+        ? 'Изменения сохранены. До встречи 22 августа в 17:00 🏀'
+        : 'Готово! Вы в стартовом составе. До встречи 22 августа в 17:00 в CleverLOFT 🏀';
       confirmMsg.style.display = 'block';
       alreadyMsg.style.display = 'block';
       submitBtn.disabled = false;

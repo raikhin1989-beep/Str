@@ -22,18 +22,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "scripts" / "og_template.html"
 OUT = ROOT / "site" / "og.png"
-PORT = 8765
 CHROMIUM = "/opt/pw-browsers/chromium-1194/chrome-linux/chrome"
 
 
 def serve():
     """Шаблон отдаём по http: через file:// браузер не подхватит шрифты
-    из соседнего каталога."""
+    из соседнего каталога.
+
+    Порт берём свободный (0), а не фиксированный: при повторном запуске
+    прежний сокет может ещё висеть, и скрипт падал с «Address already in use».
+    """
     handler = lambda *a, **kw: http.server.SimpleHTTPRequestHandler(
         *a, directory=str(ROOT), **kw)
-    httpd = socketserver.TCPServer(("127.0.0.1", PORT), handler)
+    httpd = socketserver.TCPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    return httpd
+    return httpd, httpd.server_address[1]
 
 
 def main() -> int:
@@ -46,19 +49,20 @@ def main() -> int:
         print(f"нет шаблона: {TEMPLATE}")
         return 1
 
-    httpd = serve()
+    httpd, port = serve()
     try:
         with sync_playwright() as p:
             exe = CHROMIUM if Path(CHROMIUM).exists() else None
             browser = p.chromium.launch(executable_path=exe)
             page = browser.new_page(viewport={"width": 1200, "height": 630})
-            page.goto(f"http://127.0.0.1:{PORT}/scripts/og_template.html",
+            page.goto(f"http://127.0.0.1:{port}/scripts/og_template.html",
                       wait_until="networkidle")
             page.wait_for_timeout(700)   # даём шрифтам примениться
             page.screenshot(path=str(OUT))
             browser.close()
     finally:
         httpd.shutdown()
+        httpd.server_close()
 
     print(f"записано: {OUT} ({OUT.stat().st_size} байт)")
     return 0
