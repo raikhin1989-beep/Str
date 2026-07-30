@@ -60,14 +60,16 @@ The on-server health check curls `127.0.0.1` with an overridden `Host:` header r
 The workflow writes the deployed commit SHA to `/var/www/html/version`, which is the handle for confirming what is actually live without reading Actions logs:
 
 ```
-curl http://<SERVER_HOST>/version      # deployed commit SHA
-curl http://<SERVER_HOST>/healthz      # -> ok
-curl http://<SERVER_HOST>/tls-status   # cert issuer + validity, read from the server
+curl https://<SITE_DOMAIN>/version         # deployed commit SHA
+curl https://<SITE_DOMAIN>/healthz         # -> ok
+curl https://<SITE_DOMAIN>/api/health      # backend: status, version, uptime
 ```
 
-`version` and `tls-status` are generated at deploy time, not stored in `site/`. `healthz` is a real file in `site/` and must keep returning `ok` — it's the health contract.
+`version` is generated at deploy time, not stored in `site/`. `healthz` is a real file in `site/` and must keep returning `ok` — it's the health contract.
 
-Order matters when reading these: `version` is written **before** TLS is attempted, so a fresh SHA alone does not mean the deploy finished. `tls-status` is written only after the HTTPS health check passes, so its presence is what confirms a successful certificate issuance. A fresh `version` with a missing (404) `tls-status` means the run got as far as publishing files and then failed or is still waiting on ACME.
+**`version` is written as the very last step**, after the site sync, the backend restart and the HTTPS check, so a fresh SHA means the run finished — not just that it got as far as publishing files. (It used to be written first, which made failed deploys look successful; don't move it back.) A stale SHA means the run failed or is still going.
+
+There is no `/tls-status` — it was a debug path and was removed in Ш11. Confirm TLS by the fact that the `https://` calls above answer at all; the deploy already fails the job if the certificate never materialises.
 
 ## Deploy configuration
 
