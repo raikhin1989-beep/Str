@@ -11,6 +11,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 import os
 import secrets as pysecrets
 import time
@@ -19,7 +20,8 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import (HTMLResponse, JSONResponse, Response,
+                               StreamingResponse)
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field, field_validator
 
@@ -1145,3 +1147,145 @@ def admin_photo_delete(photo_id: int, _: None = Depends(admin_auth)):
     for p in photo_paths(photo_id):
         p.unlink(missing_ok=True)
     return {"ok": True}
+
+
+def _photo_rows():
+    """Фото в порядке загрузки. Порядок по id, а не по времени: два фото из
+    одной пачки приходят в одну секунду, и сортировка по created_at
+    переставляла бы их от запроса к запросу — коллаж выходил бы каждый раз
+    другим."""
+    with db.get_conn() as conn:
+        return conn.execute(
+            "SELECT p.id, p.caption, p.created_at, p.width, p.height, g.name"
+            " FROM photos p JOIN guests g ON g.id = p.guest_id"
+            " ORDER BY p.id"
+        ).fetchall()
+
+
+def safe_part(s: str, limit: int = 40) -> str:
+    """Кусок имени файла: убираем всё, что ломает распаковку или путь.
+
+    Кириллицу оставляем — zip хранит имена в UTF-8, и «Иван-Петров.jpg»
+    читается глазами, в отличие от «7.jpg»."""
+    s = "".join(ch for ch in s if ch.isprintable() and ch not in '\\/:*?"<>|')
+    s = "-".join(s.split())
+    return s.strip(". -")[:limit] or "без-имени"
+
+
+@app.get("/api/admin/photos.zip")
+def admin_photos_zip(_: None = Depends(admin_auth)):
+    """Скачать альбом целиком — чтобы он жил не только на сервере.
+
+    Внутри лежат полноразмерные файлы с человеческими именами и `photos.csv`
+    со всеми метаданными: подпись при переименовании файла потерялась бы,
+    а она часто и есть самое ценное."""
+    import tempfile
+    import zipfile
+
+    rows = _photo_rows()
+    if not rows:
+        raise HTTPException(status_code=404, detail="Фото пока не приносили.")
+
+    # Собираем не в память: полсотни снимков по 2000 px — это десятки
+    # мегабайт, а сервер маленький. До 8 МБ файл живёт в памяти, дальше
+    # сам утекает на диск.
+    tmp = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+    manifest = io.StringIO()
+    writer = csv.writer(manifest, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(["файл", "id", "гость", "подпись", "загружено", "ширина", "высота"])
+
+    with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
+        # ZIP_STORED, а не DEFLATE: JPEG уже сжат, повторное сжатие даёт
+        # проценты и стоит процессорного времени на каждой картинке.
+        for n, r in enumerate(rows, 1):
+            full, _ = photo_paths(r["id"])
+            if not full.exists():
+                continue
+            name = f"{n:03d}-{safe_part(r['name'])}"
+            if r["caption"]:
+                name += f"-{safe_part(r['caption'], 60)}"
+            name += ".jpg"
+            z.write(full, name)
+            writer.writerow([name, r["id"], r["name"], r["caption"],
+                             r["created_at"], r["width"], r["height"]])
+        z.writestr("photos.csv", ("﻿" + manifest.getvalue()).encode("utf-8"))
+
+    size = tmp.tell()
+    tmp.seek(0)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    def stream():
+        try:
+            while chunk := tmp.read(64 * 1024):
+                yield chunk
+        finally:
+            tmp.close()
+
+    return StreamingResponse(
+        stream(), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="photos-{stamp}.zip"',
+                 "Content-Length": str(size)})
+
+
+COLLAGE_MAX_SIDE = 8000      # дальше JPEG становится неудобным для просмотра
+
+
+@app.get("/api/admin/photos/collage.jpg")
+def admin_photos_collage(cell: int = 500, cols: int = 0,
+                         _: None = Depends(admin_auth)):
+    """Коллаж из всех фото — сеткой, на фоне цвета сайта.
+
+    Ячейки квадратные: кадры приходят и вертикальные, и горизонтальные, и
+    без обрезки сетка превращается в решето из пустот. Обрезаем по центру,
+    смещённому чуть вверх (0.4) — на вертикальных снимках лица выше середины,
+    и ровно по центру им срезает макушки.
+
+    Надписей на коллаже нет намеренно: шрифты сайта лежат в woff2, который
+    Pillow не читает, а какой TTF найдётся на сервере — не гарантировано.
+    Подписать чужим шрифтом или получить квадратики вместо букв хуже, чем
+    не подписывать; имена и подписи есть в zip-архиве.
+    """
+    from PIL import Image, ImageOps
+
+    rows = [r for r in _photo_rows() if photo_paths(r["id"])[0].exists()]
+    if not rows:
+        raise HTTPException(status_code=404, detail="Фото пока не приносили.")
+
+    cell = max(120, min(cell, 1000))
+    n = len(rows)
+    if cols <= 0:
+        cols = math.ceil(math.sqrt(n))       # сетка как можно ближе к квадрату
+    cols = max(1, min(cols, n))
+    rows_n = math.ceil(n / cols)
+
+    gap, pad = max(4, cell // 40), max(8, cell // 20)
+    width = pad * 2 + cols * cell + (cols - 1) * gap
+    height = pad * 2 + rows_n * cell + (rows_n - 1) * gap
+    if max(width, height) > COLLAGE_MAX_SIDE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Коллаж вышел бы {width}×{height} — уменьшите размер ячейки.")
+
+    # Последний ряд обычно неполный; центрируем его, иначе коллаж выглядит
+    # обрезанным справа, как будто чего-то не хватает.
+    tail = n % cols
+    tail_shift = ((cols - tail) * (cell + gap)) // 2 if tail else 0
+
+    canvas = Image.new("RGB", (width, height), (12, 27, 61))   # --navy сайта
+    for i, r in enumerate(rows):
+        full, _ = photo_paths(r["id"])
+        with Image.open(full) as im:
+            tile = ImageOps.fit(im.convert("RGB"), (cell, cell),
+                                method=Image.LANCZOS, centering=(0.5, 0.4))
+        row_i, col_i = divmod(i, cols)
+        x = pad + col_i * (cell + gap) + (tail_shift if row_i == rows_n - 1 else 0)
+        y = pad + row_i * (cell + gap)
+        canvas.paste(tile, (x, y))
+
+    buf = io.BytesIO()
+    canvas.save(buf, "JPEG", quality=88, optimize=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return Response(
+        content=buf.getvalue(), media_type="image/jpeg",
+        headers={"Content-Disposition":
+                 f'attachment; filename="collage-{stamp}.jpg"'})

@@ -60,7 +60,7 @@ Fonts: только latin, latin-ext, vietnamese). То есть «Алекса�
 системным шрифтом, а не задуманным.
 
 Замена: Anton → **Oswald 700**, Bangers → **Russo One** для кириллицы.
-Bangers оставлен только для латинского «SMART HERO». Все файлы скачаны в
+Bangers оставлен только для латинского «SPORT HERO». Все файлы скачаны в
 `site/fonts/` (подмножества cyrillic + latin), страница больше не зависит
 от `fonts.googleapis.com`.
 

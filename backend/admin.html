@@ -59,6 +59,13 @@
   .norms summary { cursor: pointer; }
   .norms div { padding: 10px 0 0 4px; line-height: 1.7; }
   .custom { color: var(--gold); }
+  .ph-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+  /* Кнопки живут внутри .tg, а там ссылки золотые — на золотой заливке
+     получался золотой текст на золотом фоне. Цвет задаём явно. */
+  .ph-actions .btn { padding: 8px 14px; font-size: 12px; color: var(--navy); }
+  .ph-actions .btn.ghost { color: var(--cream); }
+  .ph-cell { font-size: 12px; opacity: 0.7; }
+  .ph-cell input { width: 72px; background: var(--navy); color: var(--cream); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; }
   .ph-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px,1fr)); gap: 10px; margin-top: 10px; }
   .ph-grid figure { margin: 0; }
   .ph-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; display: block; border: 1px solid var(--line); }
@@ -285,12 +292,31 @@
     if (!d.count) { el.innerHTML = '<span class="muted">Фото пока не приносили.</span>'; return; }
     const mb = (d.disk_bytes / 1048576).toFixed(1);
     el.innerHTML = `Фото: <b>${esc(d.count)}</b> · на диске ${esc(mb)} МБ`
+      + '<div class="ph-actions">'
+      + '<a class="btn" href="/api/admin/photos.zip">Скачать все (zip)</a>'
+      + '<a class="btn ghost" href="/api/admin/photos/collage.jpg">Коллаж</a>'
+      + '<label class="ph-cell">клетка <input type="number" id="ph-cell" value="500" min="120" max="1000" step="50"> px</label>'
+      + '</div>'
+      + '<div class="muted" style="margin-top:6px">В архиве — полные файлы и <code>photos.csv</code> с именами и подписями: '
+      + 'в самих именах файлов подпись обрезается, а она часто и есть самое ценное.</div>'
       + '<div class="ph-grid">' + d.photos.map(p =>
         `<figure><a href="/api/photos/${p.id}" target="_blank" rel="noopener">`
         + `<img src="/api/photos/${p.id}/thumb" alt=""></a>`
         + `<figcaption>${esc(p.name)}${p.caption ? '<br>' + esc(p.caption) : ''}`
         + `<br><span class="muted">${esc(p.width)}×${esc(p.height)}</span></figcaption>`
         + `<button data-ph="${p.id}">Удалить</button></figure>`).join('') + '</div>';
+
+    // Размер клетки подставляем в ссылку, а не шлём fetch'ем: скачивание
+    // должен делать сам браузер, иначе картинку пришлось бы держать в памяти
+    // страницы и отдавать через blob.
+    const cellInput = document.getElementById('ph-cell');
+    const collage = el.querySelector('a[href^="/api/admin/photos/collage"]');
+    const syncCollage = () => {
+      const v = parseInt(cellInput.value, 10);
+      collage.href = '/api/admin/photos/collage.jpg' + (v ? '?cell=' + v : '');
+    };
+    cellInput.addEventListener('input', syncCollage);
+    syncCollage();
 
     el.querySelectorAll('button[data-ph]').forEach(btn => {
       btn.addEventListener('click', async () => {
