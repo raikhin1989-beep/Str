@@ -48,6 +48,12 @@ env:
   #   off     — без TLS, сайт отдаётся только по HTTP на порту 80.
   TLS_MODE: fixed
   SITE_DOMAIN_FIXED: raikhin.duckdns.org
+  # Резервное имя на тот же сервер. Поддомены duckdns.org встречаются в
+  # реестре РКН, и есть сообщения, что у отдельных операторов duckdns.org
+  # не открывается — тогда гость не увидит приглашение вообще. sslip.io —
+  # независимый сервис, резолвящий закодированный в имени IP, аккаунт не
+  # нужен. Сертификат Caddy выпустит на оба имени.
+  SITE_DOMAIN_ALT: 91-212-150-225.sslip.io
 
 jobs:
   # ── DEPLOY: выложить содержимое site/ на сервер ─────────────────────────────
@@ -262,7 +268,7 @@ jobs:
           password: ${{ secrets.SERVER_PASSWORD }}
           port: ${{ secrets.SERVER_PORT || 22 }}
           command_timeout: 10m
-          envs: GITHUB_SHA,SITE_DOMAIN,SERVER_ADDR,ACME_EMAIL,ADMIN_PASSWORD,TELEGRAM_BOT_TOKEN,TG_BOT_USERNAME,TG_RUNNER,TG_WEBHOOK,TG_HOOKINFO
+          envs: GITHUB_SHA,SITE_DOMAIN,SITE_DOMAIN_ALT,SERVER_ADDR,ACME_EMAIL,ADMIN_PASSWORD,TELEGRAM_BOT_TOKEN,TG_BOT_USERNAME,TG_RUNNER,TG_WEBHOOK,TG_HOOKINFO
           script: |
             set -e
             chmod -R a+rX /var/www/html
@@ -365,6 +371,11 @@ jobs:
               # Тип задаём явно: без него телефон предложит скачать файл
               # вместо добавления события, а полагаться на mime.types сервера
               # не хочется.
+              # Шрифты и картинка превью не меняются между деплоями, а имена
+              # у них стабильные. Год кэша экономит гостю трафик при повторном
+              # заходе; при смене шрифтов достаточно поменять имя файла.
+              printf '\t@static path /fonts/* /og.png\n'
+              printf '\theader @static Cache-Control "public, max-age=31536000, immutable"\n'
               printf '\thandle /calendar.ics {\n\t\theader Content-Type "text/calendar; charset=utf-8"\n\t\troot * /var/www/html\n\t\tfile_server\n\t}\n'
               printf '\thandle /admin* {\n\t\treverse_proxy 127.0.0.1:8000\n\t}\n'
               printf '\thandle /api/* {\n\t\treverse_proxy 127.0.0.1:8000\n\t}\n'

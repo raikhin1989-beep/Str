@@ -45,6 +45,9 @@
     --font-burst: 'Russo One', 'Oswald', sans-serif;
     --font-comic: 'Bangers', cursive;
     --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+    /* Моно поставляется только в 700: два начертания стоили лишних 39 КБ,
+       а подписи капсом по 10–11 px от жирного только выигрывают. Правила
+       ниже могут не указывать вес — браузер возьмёт единственный доступный. */
     --font-mono: 'JetBrains Mono', ui-monospace, monospace;
   }
 
@@ -164,7 +167,7 @@
     margin: 10px auto 0;
     line-height: 1.5;
   }
-  .tagline b { color: var(--hero-gold); font-weight: 800; }
+  .tagline b { color: var(--hero-gold); font-weight: 700; }
 
   /* ---------- SCOREBOARD ---------- */
   .scoreboard {
@@ -388,7 +391,7 @@
 
   .dossier-row .value {
     font-size: 15px;
-    font-weight: 600;
+    font-weight: 700;
     line-height: 1.4;
   }
 
@@ -645,7 +648,7 @@
     text-decoration: none;
     padding: 12px 18px;
     border-radius: 10px;
-    font-weight: 600;
+    font-weight: 700;
     font-size: 14px;
   }
   .tg-ok {
