@@ -16,6 +16,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +24,9 @@ DATA_DIR = Path(os.environ.get("STR_DATA_DIR", "/opt/str-api/data"))
 DB_PATH = DATA_DIR / "str.db"
 BACKUP_DIR = Path(os.environ.get("STR_BACKUP_DIR", "/opt/str-api/backups"))
 KEEP = int(os.environ.get("STR_BACKUP_KEEP", "7"))
+PHOTO_DIR = Path(os.environ.get("STR_PHOTO_DIR", str(DATA_DIR / "photos")))
+# Фото весят несравнимо больше базы, поэтому их копий держим меньше.
+PHOTO_KEEP = int(os.environ.get("STR_PHOTO_BACKUP_KEEP", "2"))
 
 
 def make_backup() -> Path:
@@ -47,13 +51,30 @@ def make_backup() -> Path:
     return final
 
 
+def backup_photos() -> Path | None:
+    """Фото не попадают в снимок базы — там только метаданные. Без отдельной
+    копии восстановление вернуло бы альбом с битыми картинками."""
+    if not PHOTO_DIR.exists() or not any(PHOTO_DIR.iterdir()):
+        return None
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    out = BACKUP_DIR / f"photos-{stamp}.tar.gz"
+    with tarfile.open(out, "w:gz") as tar:
+        tar.add(PHOTO_DIR, arcname="photos")
+    out.chmod(0o600)
+    return out
+
+
 def rotate() -> list[Path]:
     """Оставляем KEEP свежих. Имена содержат дату в сортируемом виде,
     поэтому обычной сортировки достаточно."""
-    snaps = sorted(BACKUP_DIR.glob("str-*.db.gz"))
-    dropped = snaps[:-KEEP] if len(snaps) > KEEP else []
-    for old in dropped:
-        old.unlink()
+    dropped = []
+    for pattern, keep in (("str-*.db.gz", KEEP), ("photos-*.tar.gz", PHOTO_KEEP)):
+        snaps = sorted(BACKUP_DIR.glob(pattern))
+        old = snaps[:-keep] if len(snaps) > keep else []
+        for f in old:
+            f.unlink()
+        dropped.extend(old)
     return dropped
 
 
@@ -62,9 +83,11 @@ def main() -> int:
         print(f"базы нет: {DB_PATH}")
         return 1
     path = make_backup()
+    photos = backup_photos()
     dropped = rotate()
-    size = path.stat().st_size
-    print(f"снимок: {path.name} ({size} байт)")
+    print(f"снимок: {path.name} ({path.stat().st_size} байт)")
+    if photos:
+        print(f"фото:   {photos.name} ({photos.stat().st_size} байт)")
     if dropped:
         print(f"удалено старых: {', '.join(p.name for p in dropped)}")
     print(f"всего снимков: {len(sorted(BACKUP_DIR.glob('str-*.db.gz')))}")

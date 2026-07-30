@@ -444,10 +444,18 @@ def admin_rename(guest_id: int, patch: AdminPatch, _: None = Depends(admin_auth)
 @app.delete("/api/admin/guests/{guest_id}")
 def admin_delete(guest_id: int, _: None = Depends(admin_auth)):
     with db.get_conn() as conn:
+        # Фото удаляем в той же транзакции и файлы — сразу после: иначе на
+        # диске остались бы картинки, на которые уже никто не ссылается.
+        photo_ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM photos WHERE guest_id = ?", (guest_id,))]
         cur = conn.execute("DELETE FROM guests WHERE id = ?", (guest_id,))
         if cur.rowcount == 0:
             raise HTTPException(status_code=404, detail="Запись не найдена")
-    return {"ok": True}
+        conn.execute("DELETE FROM photos WHERE guest_id = ?", (guest_id,))
+    for pid in photo_ids:
+        for f in photo_paths(pid):
+            f.unlink(missing_ok=True)
+    return {"ok": True, "photos_removed": len(photo_ids)}
 
 
 # ── КАЛЬКУЛЯТОР БАРА ────────────────────────────────────────────────────────
@@ -945,3 +953,195 @@ def playlist():
         "count": len(rows),
         "tracks": [{"name": short_name(r["name"]), "track": r["track"]} for r in rows],
     }
+
+
+# ── ФОТОАЛЬБОМ ──────────────────────────────────────────────────────────────
+# Гость приносит любимое или совместное фото с имениником. Файлы лежат на
+# диске рядом с базой, в SQLite только метаданные.
+#
+# Каждое фото пересохраняется через Pillow, и это не косметика:
+#   * доказывает, что файл действительно картинка, а не переименованный zip
+#     с заявленным image/jpeg — заголовку из формы верить нельзя;
+#   * уменьшает до разумного размера, иначе снимок с телефона на 12 Мп
+#     будет грузиться у гостей минуту;
+#   * попутно срезает EXIF, в котором у телефонных фото лежат GPS-координаты
+#     места съёмки — этому в открытом альбоме точно не место.
+
+PHOTO_DIR = Path(os.environ.get("STR_PHOTO_DIR",
+                                str(db.DATA_DIR / "photos")))
+MAX_UPLOAD_BYTES = 12 * 1024 * 1024      # 12 МБ — снимок с любого телефона влезает
+MAX_SIDE = 2000                          # длинная сторона готового фото
+THUMB_SIDE = 480
+PHOTOS_PER_GUEST = 5
+ALLOWED_FORMATS = {"JPEG", "PNG", "WEBP", "MPO", "GIF"}
+
+
+def photo_paths(photo_id: int) -> tuple[Path, Path]:
+    return (PHOTO_DIR / f"{photo_id}.jpg", PHOTO_DIR / f"{photo_id}_thumb.jpg")
+
+
+def _guest_by_token(conn, token: str):
+    if not token:
+        return None
+    return conn.execute("SELECT * FROM guests WHERE token = ?", (token,)).fetchone()
+
+
+@app.get("/api/photos")
+def photos_list():
+    """Публичный альбом: id, кто принёс (сокращённо) и подпись."""
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT p.id, p.caption, p.created_at, g.name"
+            " FROM photos p JOIN guests g ON g.id = p.guest_id"
+            " ORDER BY p.created_at DESC, p.id DESC"
+        ).fetchall()
+    return {
+        "count": len(rows),
+        "photos": [{"id": r["id"], "name": short_name(r["name"]),
+                    "caption": r["caption"]} for r in rows],
+    }
+
+
+def _send_photo(photo_id: int, thumb: bool):
+    full, small = photo_paths(photo_id)
+    path = small if thumb else full
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Фото не найдено")
+    # Тип задаём сами, а не берём из запроса: всё сохранённое — JPEG,
+    # потому что мы его пересохранили.
+    return Response(content=path.read_bytes(), media_type="image/jpeg",
+                    headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/api/photos/{photo_id}")
+def photo_full(photo_id: int):
+    return _send_photo(photo_id, thumb=False)
+
+
+@app.get("/api/photos/{photo_id}/thumb")
+def photo_thumb(photo_id: int):
+    return _send_photo(photo_id, thumb=True)
+
+
+@app.post("/api/photos")
+async def photo_upload(request: Request):
+    """Загрузка фото. Гость опознаётся токеном своей заявки: альбом собирают
+    те, кто идёт, а не любой прохожий со ссылкой."""
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    form = await request.form()
+    token = str(form.get("token") or "")
+    caption = str(form.get("caption") or "").strip()[:100]
+    upload = form.get("file")
+
+    if upload is None or not hasattr(upload, "read"):
+        raise HTTPException(status_code=400, detail="Файл не передан.")
+
+    with db.get_conn() as conn:
+        guest = _guest_by_token(conn, token)
+        if guest is None:
+            raise HTTPException(
+                status_code=403,
+                detail="Сначала запишитесь в состав — фото привязывается к заявке.")
+        mine = conn.execute(
+            "SELECT count(*) AS n FROM photos WHERE guest_id = ?",
+            (guest["id"],)).fetchone()["n"]
+    if mine >= PHOTOS_PER_GUEST:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Больше {PHOTOS_PER_GUEST} фото от одного гостя не принимаем.")
+
+    raw = await upload.read()
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Файл больше {MAX_UPLOAD_BYTES // (1024*1024)} МБ.")
+    if not raw:
+        raise HTTPException(status_code=400, detail="Файл пустой.")
+
+    try:
+        img = Image.open(io.BytesIO(raw))
+        fmt = img.format
+        img.load()
+    except (UnidentifiedImageError, OSError, ValueError):
+        raise HTTPException(
+            status_code=400,
+            detail="Не удалось прочитать картинку. Если это HEIC с iPhone, "
+                   "сохраните её как JPEG и попробуйте снова.")
+    if fmt not in ALLOWED_FORMATS:
+        raise HTTPException(status_code=400,
+                            detail=f"Формат {fmt} не поддерживается.")
+
+    # exif_transpose разворачивает снимок по ориентации из EXIF: без этого
+    # фото с телефона легло бы набок, ведь сам EXIF мы дальше отбрасываем.
+    img = ImageOps.exif_transpose(img)
+    if img.mode not in ("RGB", "L"):
+        img = img.convert("RGB")
+
+    PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+    ts = now_iso()
+    with db.get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO photos(guest_id, caption, width, height, created_at)"
+            " VALUES (?,?,?,?,?)",
+            (guest["id"], caption, img.width, img.height, ts))
+        photo_id = cur.lastrowid
+
+    full, small = photo_paths(photo_id)
+    big = img.copy()
+    big.thumbnail((MAX_SIDE, MAX_SIDE))
+    big.save(full, "JPEG", quality=85, optimize=True)
+    thumb = img.copy()
+    thumb.thumbnail((THUMB_SIDE, THUMB_SIDE))
+    thumb.save(small, "JPEG", quality=80, optimize=True)
+
+    notify_host(f"📸 <b>{guest['name']}</b> добавил фото в альбом"
+                + (f": {caption}" if caption else ""))
+    return {"ok": True, "id": photo_id, "mine": mine + 1,
+            "limit": PHOTOS_PER_GUEST}
+
+
+@app.delete("/api/photos/{photo_id}")
+def photo_delete_own(photo_id: int, token: str = ""):
+    """Своё фото гость может убрать сам — по токену заявки."""
+    with db.get_conn() as conn:
+        guest = _guest_by_token(conn, token)
+        if guest is None:
+            raise HTTPException(status_code=403, detail="Нужен токен заявки.")
+        row = conn.execute(
+            "SELECT * FROM photos WHERE id = ? AND guest_id = ?",
+            (photo_id, guest["id"])).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Это не ваше фото.")
+        conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+    for p in photo_paths(photo_id):
+        p.unlink(missing_ok=True)
+    return {"ok": True}
+
+
+@app.get("/api/admin/photos")
+def admin_photos(_: None = Depends(admin_auth)):
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT p.id, p.caption, p.created_at, p.width, p.height, g.name"
+            " FROM photos p JOIN guests g ON g.id = p.guest_id"
+            " ORDER BY p.created_at DESC, p.id DESC"
+        ).fetchall()
+    total = sum(sum(f.stat().st_size for f in photo_paths(r["id"]) if f.exists())
+                for r in rows)
+    return {
+        "count": len(rows),
+        "disk_bytes": total,
+        "photos": [dict(r) for r in rows],
+    }
+
+
+@app.delete("/api/admin/photos/{photo_id}")
+def admin_photo_delete(photo_id: int, _: None = Depends(admin_auth)):
+    with db.get_conn() as conn:
+        cur = conn.execute("DELETE FROM photos WHERE id = ?", (photo_id,))
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Фото не найдено")
+    for p in photo_paths(photo_id):
+        p.unlink(missing_ok=True)
+    return {"ok": True}

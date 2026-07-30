@@ -12,6 +12,7 @@
 | Виртуальное окружение | `/opt/str-api/venv` |
 | База гостей | `/opt/str-api/data/str.db` |
 | Снимки базы | `/opt/str-api/backups/str-*.db.gz`, 7 последних |
+| Фото гостей | `/opt/str-api/data/photos`, архивы `backups/photos-*.tar.gz`, 2 копии |
 | Сервис | systemd `str-api`, слушает `127.0.0.1:8000` |
 | Бэкапы | systemd `str-backup.timer`, ежедневно в 03:30 UTC |
 | Веб-сервер | Caddy, `/etc/caddy/Caddyfile` (переписывается при каждом деплое) |
@@ -65,6 +66,24 @@ SQLite, найдя их рядом с восстановленной, может
 
 Снимок сделан через `sqlite3.Connection.backup()`, а не копированием файла:
 при работающем WAL обычный `cp` уносит базу без части свежих транзакций.
+
+## Восстановить фотоальбом
+
+Фото не лежат в снимке базы — там только метаданные. Архив с файлами
+складывается рядом, хранится 2 копии.
+
+```
+systemctl stop str-api
+ls -1 /opt/str-api/backups/photos-*.tar.gz
+tar -xzf /opt/str-api/backups/photos-20260730-044748.tar.gz -C /tmp
+rm -rf /opt/str-api/data/photos
+mv /tmp/photos /opt/str-api/data/photos
+chown -R strapi:strapi /opt/str-api/data/photos
+systemctl start str-api
+```
+
+Восстанавливать базу и фото нужно **из пары снимков одного времени**: иначе
+в базе окажутся записи о фото, которых нет на диске, или наоборот.
 
 ## Сделать снимок прямо сейчас
 

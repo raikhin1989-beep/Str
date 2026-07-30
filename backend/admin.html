@@ -59,6 +59,11 @@
   .norms summary { cursor: pointer; }
   .norms div { padding: 10px 0 0 4px; line-height: 1.7; }
   .custom { color: var(--gold); }
+  .ph-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px,1fr)); gap: 10px; margin-top: 10px; }
+  .ph-grid figure { margin: 0; }
+  .ph-grid img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 8px; display: block; border: 1px solid var(--line); }
+  .ph-grid figcaption { font-size: 11px; opacity: 0.7; margin-top: 4px; line-height: 1.3; }
+  .ph-grid button { margin-top: 4px; background: transparent; border: 1px solid var(--line); color: #ff9a9a; border-radius: 6px; font-size: 11px; padding: 3px 7px; cursor: pointer; }
   .tg { background: var(--ink); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 8px; font-size: 13px; line-height: 1.7; }
   .tg a { color: var(--gold); }
   .tg .bad { color: #ff9a9a; }
@@ -90,6 +95,9 @@
 
   <h2 class="h2">Плейлист</h2>
   <div class="tg" id="pl"></div>
+
+  <h2 class="h2">Фотоальбом</h2>
+  <div class="tg" id="ph"></div>
 
   <h2 class="h2">Ограничения в еде</h2>
   <div class="tg" id="allerg"></div>
@@ -266,6 +274,34 @@
     });
   }
 
+  async function loadPhotos() {
+    const el = document.getElementById('ph');
+    let d;
+    try {
+      const res = await fetch('/api/admin/photos');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      d = await res.json();
+    } catch (e) { el.innerHTML = '<span class="bad">Не удалось: ' + esc(e.message) + '</span>'; return; }
+    if (!d.count) { el.innerHTML = '<span class="muted">Фото пока не приносили.</span>'; return; }
+    const mb = (d.disk_bytes / 1048576).toFixed(1);
+    el.innerHTML = `Фото: <b>${esc(d.count)}</b> · на диске ${esc(mb)} МБ`
+      + '<div class="ph-grid">' + d.photos.map(p =>
+        `<figure><a href="/api/photos/${p.id}" target="_blank" rel="noopener">`
+        + `<img src="/api/photos/${p.id}/thumb" alt=""></a>`
+        + `<figcaption>${esc(p.name)}${p.caption ? '<br>' + esc(p.caption) : ''}`
+        + `<br><span class="muted">${esc(p.width)}×${esc(p.height)}</span></figcaption>`
+        + `<button data-ph="${p.id}">Удалить</button></figure>`).join('') + '</div>';
+
+    el.querySelectorAll('button[data-ph]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        if (!confirm('Удалить это фото? Это необратимо.')) return;
+        const res = await fetch('/api/admin/photos/' + btn.dataset.ph, { method: 'DELETE' });
+        if (!res.ok) return showErr('Не удалось удалить фото: HTTP ' + res.status);
+        loadPhotos();
+      });
+    });
+  }
+
   async function loadAllergies() {
     const el = document.getElementById('allerg');
     let d;
@@ -372,7 +408,7 @@
     }
   });
 
-  function loadAll() { load(); loadSysinfo(); loadBar(); loadTelegram(); loadReminders(); loadPlaylist(); loadAllergies(); }
+  function loadAll() { load(); loadSysinfo(); loadBar(); loadTelegram(); loadReminders(); loadPlaylist(); loadPhotos(); loadAllergies(); }
   document.getElementById('reload').addEventListener('click', loadAll);
   loadAll();
 </script>

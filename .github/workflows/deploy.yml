@@ -205,7 +205,7 @@ jobs:
             # синхронизируется с --delete и виден снаружи.
             id -u strapi >/dev/null 2>&1 || \
               useradd --system --home-dir /opt/str-api --shell /usr/sbin/nologin strapi
-            mkdir -p /opt/str-api/src /opt/str-api/data
+            mkdir -p /opt/str-api/src /opt/str-api/data /opt/str-api/data/photos
 
             # DNS отдаёт api.telegram.org и по IPv6, но IPv6-связности у
             # сервера нет — соединение молча уходит в таймаут. Просим glibc
@@ -286,6 +286,7 @@ jobs:
             WorkingDirectory=/opt/str-api/src
             Environment=APP_VERSION=$GITHUB_SHA
             Environment=STR_DATA_DIR=/opt/str-api/data
+            Environment=STR_PHOTO_DIR=/opt/str-api/data/photos
             Environment="ADMIN_PASSWORD=$ADMIN_PASSWORD"
             Environment="TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
             Environment="TG_BOT_USERNAME=$TG_BOT_USERNAME"
@@ -313,6 +314,7 @@ jobs:
             Group=strapi
             Environment="STR_DATA_DIR=/opt/str-api/data"
             Environment="STR_BACKUP_DIR=/opt/str-api/backups"
+            Environment="STR_PHOTO_DIR=/opt/str-api/data/photos"
             ExecStart=/opt/str-api/venv/bin/python /opt/str-api/src/backup.py
             UNIT
             cat > /etc/systemd/system/str-backup.timer <<UNIT

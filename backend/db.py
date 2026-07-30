@@ -96,6 +96,24 @@ MIGRATIONS = [
         # должна прозвучать.
         "ALTER TABLE guests ADD COLUMN track TEXT NOT NULL DEFAULT '';",
     ),
+    (
+        "007_photos",
+        # Фотоальбом: гость приносит любимое или совместное фото с именинником.
+        # Сами файлы лежат в STR_PHOTO_DIR, в базе только метаданные — держать
+        # картинки в SQLite незачем, а отдавать их проще с диска.
+        """
+        CREATE TABLE photos (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            guest_id   INTEGER NOT NULL,
+            caption    TEXT    NOT NULL DEFAULT '',
+            width      INTEGER NOT NULL DEFAULT 0,
+            height     INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT    NOT NULL
+        );
+        CREATE INDEX idx_photos_guest ON photos(guest_id);
+        CREATE INDEX idx_photos_created ON photos(created_at);
+        """,
+    ),
 ]
 
 

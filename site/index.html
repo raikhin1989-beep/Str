@@ -691,6 +691,69 @@
   }
   .track-row .what { line-height: 1.4; }
 
+  .album-upload {
+    background: var(--ink);
+    border: 1px dashed rgba(255,198,71,0.4);
+    border-radius: 16px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+  .au-hint { font-size: 13px; opacity: 0.7; line-height: 1.5; margin-bottom: 12px; }
+  .album-upload input[type="file"] {
+    width: 100%;
+    color: var(--paper-cream);
+    font-size: 13px;
+    margin-bottom: 10px;
+  }
+  .album-upload input[type="text"] {
+    width: 100%;
+    background: rgba(245,239,224,0.06);
+    border: 1px solid rgba(245,239,224,0.25);
+    color: var(--paper-cream);
+    padding: 11px 13px;
+    border-radius: 10px;
+    font-size: 14px;
+    font-family: var(--font-body);
+    margin-bottom: 12px;
+  }
+
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    gap: 10px;
+  }
+  .gallery figure { margin: 0; }
+  .gallery a {
+    display: block;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--line-white);
+    background: rgba(245,239,224,0.05);
+  }
+  .gallery img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    object-fit: cover;
+  }
+  .gallery figcaption {
+    font-size: 11px;
+    opacity: 0.6;
+    margin-top: 5px;
+    line-height: 1.35;
+  }
+  .gallery .by {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--hero-gold);
+    opacity: 0.85;
+  }
+  .gallery .drop {
+    background: none; border: none; color: #ff9a9a;
+    font-size: 11px; padding: 2px 0; cursor: pointer;
+  }
+
   .note {
     text-align: center;
     font-size: 12px;
@@ -957,6 +1020,33 @@
     </div>
   </div>
 
+  <div class="section">
+    <div class="section-head">
+      <span class="tag">Архив</span>
+      <h2>Фотоальбом</h2>
+    </div>
+
+    <div class="album-upload" id="album-upload">
+      <div class="au-hint" id="au-need-rsvp">
+        Чтобы добавить фото, сначала запишитесь в состав — альбом собирают те, кто идёт.
+      </div>
+      <div id="au-form" style="display:none">
+        <div class="au-hint">
+          Любимое или совместное фото с имениником. Его увидят все, у кого есть
+          ссылка на приглашение. Можно до 5 штук.
+        </div>
+        <input type="file" id="photo-file" accept="image/jpeg,image/png,image/webp,image/gif">
+        <input type="text" id="photo-caption" placeholder="Подпись: где и когда (необязательно)" maxlength="100">
+        <button class="submit-btn" id="photo-btn" type="button">Добавить фото</button>
+        <div class="error-msg" id="photo-err"></div>
+      </div>
+    </div>
+
+    <div class="gallery" id="gallery">
+      <div class="roster-empty">Пока пусто — принесите первое фото</div>
+    </div>
+  </div>
+
   <div class="note">
     Список подтвердивших виден всем, у кого есть ссылка на приглашение — это чтобы вся команда видела, кто уже в игре.
   </div>
@@ -1169,6 +1259,77 @@
   }
   loadPlaylist();
 
+  // ---------- Фотоальбом ----------
+  const gallery = document.getElementById('gallery');
+  const auNeed = document.getElementById('au-need-rsvp');
+  const auForm = document.getElementById('au-form');
+  const photoFile = document.getElementById('photo-file');
+  const photoCaption = document.getElementById('photo-caption');
+  const photoBtn = document.getElementById('photo-btn');
+  const photoErr = document.getElementById('photo-err');
+
+  // Загрузка привязана к заявке: токен есть только у того, кто записался.
+  function refreshUploadBox() {
+    const has = !!localStorage.getItem(TOKEN_KEY);
+    auNeed.style.display = has ? 'none' : 'block';
+    auForm.style.display = has ? 'block' : 'none';
+  }
+
+  async function loadGallery() {
+    try {
+      const res = await fetch('/api/photos');
+      if (!res.ok) throw new Error('bad status');
+      const d = await res.json();
+      if (!d.photos.length) {
+        gallery.innerHTML = '<div class="roster-empty">Пока пусто — принесите первое фото</div>';
+        return;
+      }
+      gallery.innerHTML = d.photos.map(ph =>
+        '<figure><a href="/api/photos/' + ph.id + '" target="_blank" rel="noopener">'
+        + '<img src="/api/photos/' + ph.id + '/thumb" alt="' + esc(ph.caption || 'фото') + '" loading="lazy"></a>'
+        + '<figcaption><span class="by">' + esc(ph.name) + '</span>'
+        + (ph.caption ? '<br>' + esc(ph.caption) : '') + '</figcaption></figure>').join('');
+    } catch (e) {
+      gallery.innerHTML = '<div class="roster-empty">Не удалось загрузить альбом</div>';
+    }
+  }
+  refreshUploadBox();
+  loadGallery();
+
+  photoBtn.addEventListener('click', async () => {
+    photoErr.style.display = 'none';
+    const f = photoFile.files && photoFile.files[0];
+    if (!f) {
+      photoErr.textContent = 'Выберите файл.';
+      photoErr.style.display = 'block';
+      return;
+    }
+    const fd = new FormData();
+    fd.append('file', f);
+    fd.append('caption', photoCaption.value.trim());
+    fd.append('token', localStorage.getItem(TOKEN_KEY) || '');
+
+    photoBtn.disabled = true;
+    photoBtn.textContent = 'Загружаю...';
+    try {
+      const res = await fetch('/api/photos', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        photoErr.textContent = data.detail || 'Не получилось загрузить.';
+        photoErr.style.display = 'block';
+      } else {
+        photoFile.value = '';
+        photoCaption.value = '';
+        loadGallery();
+      }
+    } catch (e) {
+      photoErr.textContent = 'Сервер не ответил. Попробуйте ещё раз.';
+      photoErr.style.display = 'block';
+    }
+    photoBtn.disabled = false;
+    photoBtn.textContent = 'Добавить фото';
+  });
+
   function showError(text) {
     errorMsg.textContent = text;
     errorMsg.style.display = 'block';
@@ -1265,6 +1426,7 @@
       showMyLink(data.token);
       loadRoster();
       loadPlaylist();
+      refreshUploadBox();
       // Диплинк собирается из кода записи, поэтому забираем её свежей.
       fetch('/api/rsvp?token=' + encodeURIComponent(data.token))
         .then(r => r.ok ? r.json() : null)
