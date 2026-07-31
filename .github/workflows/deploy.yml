@@ -406,6 +406,21 @@ jobs:
             else
               site_block ":80" > /etc/caddy/Caddyfile
             fi
+
+            # Этот файл пересобирается с нуля на каждом деплое, поэтому соседние
+            # проекты на том же сервере (сейчас — Str-1) не правят его, а кладут
+            # свой блок в /etc/caddy/sites.d/. Плейсхолдер нужен, чтобы glob
+            # всегда совпадал хотя бы с одним файлом.
+            #
+            # Обратная сторона: битый файл соседа роняет caddy validate ниже и
+            # валит этот деплой. Поэтому сосед обязан валидировать конфиг у себя
+            # до того, как что-то туда положит.
+            mkdir -p /etc/caddy/sites.d
+            [ -e /etc/caddy/sites.d/00-placeholder.caddy ] || \
+              printf '# Держит glob в import непустым. Не удалять.\n' \
+                > /etc/caddy/sites.d/00-placeholder.caddy
+            printf '\nimport /etc/caddy/sites.d/*.caddy\n' >> /etc/caddy/Caddyfile
+
             caddy fmt --overwrite /etc/caddy/Caddyfile || true
             caddy validate --config /etc/caddy/Caddyfile
 
