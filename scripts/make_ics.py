@@ -51,8 +51,7 @@ def ics_fold(line: str) -> str:
 def build() -> str:
     fmt = "%Y%m%dT%H%M%SZ"
     start = EVENT_AT.astimezone(timezone.utc)
-    desc = ("Дресс-код: нарядно плюс один геройский акцент. "
-            f"Подробности и список гостей: {SITE_URL}")
+    desc = f"Подробности, дресс-код и список гостей: {SITE_URL}"
     lines = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
