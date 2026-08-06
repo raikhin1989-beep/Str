@@ -64,11 +64,15 @@ def main() -> int:
     updates = get_updates(offset)
     if updates is None:
         return 1
+    # Пустую пачку тоже отправляем: приложению нужен факт «опрос состоялся».
+    # Раньше на пустом ответе задача молча завершалась, и отметка опроса
+    # застывала на дате последнего гостя, нажавшего «Старт», — админка после
+    # этого показывала, что приём обновлений встал, хотя всё работало.
+    res = api("/api/admin/tg/updates", {"updates": updates})
     if not updates:
         print(f"новых обновлений нет (offset={offset})")
         return 0
 
-    res = api("/api/admin/tg/updates", {"updates": updates})
     print(f"обработано обновлений: {res['processed']}, "
           f"следующий offset: {res['next_offset']}")
     return 0

@@ -757,6 +757,20 @@
     font-size: 11px; padding: 2px 0; cursor: pointer;
   }
 
+  .ph-del {
+    margin-top: 6px;
+    background: transparent;
+    border: 1px solid var(--line-white);
+    color: var(--paper-cream);
+    opacity: 0.7;
+    border-radius: 6px;
+    padding: 4px 9px;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .ph-del:hover { border-color: var(--cska-red); color: var(--cska-red); opacity: 1; }
+
   .note {
     text-align: center;
     font-size: 12px;
@@ -884,7 +898,7 @@
       <div class="notice" id="offline-msg" style="display:none">
         <b>Запись временно недоступна</b>
         Не отвечает сервер записи. Само приглашение работает: дата, место и
-        дресс-код ниже. Попробуйте обновить страницу через несколько минут —
+        дресс-код выше. Попробуйте обновить страницу через несколько минут —
         или напишите имениннику напрямую.
       </div>
 
@@ -1006,7 +1020,7 @@
       </div>
       <div id="au-form" style="display:none">
         <div class="au-hint">
-          Любимое или совместное фото с имениником. Его увидят все, у кого есть
+          Любимое или совместное фото с именинником. Его увидят все, у кого есть
           ссылка на приглашение. Можно до 5 штук.
         </div>
         <input type="file" id="photo-file" accept="image/jpeg,image/png,image/webp,image/gif">
@@ -1250,8 +1264,11 @@
   }
 
   async function loadGallery() {
+    // Токен передаём, чтобы сервер пометил свои фото: альбом публичный, и
+    // без этого страница не знает, у какой карточки рисовать «Удалить».
+    const tok = localStorage.getItem(TOKEN_KEY) || '';
     try {
-      const res = await fetch('/api/photos');
+      const res = await fetch('/api/photos' + (tok ? '?token=' + encodeURIComponent(tok) : ''));
       if (!res.ok) throw new Error('bad status');
       const d = await res.json();
       if (!d.photos.length) {
@@ -1262,11 +1279,30 @@
         '<figure><a href="/api/photos/' + ph.id + '" target="_blank" rel="noopener">'
         + '<img src="/api/photos/' + ph.id + '/thumb" alt="' + esc(ph.caption || 'фото') + '" loading="lazy"></a>'
         + '<figcaption><span class="by">' + esc(ph.name) + '</span>'
-        + (ph.caption ? '<br>' + esc(ph.caption) : '') + '</figcaption></figure>').join('');
+        + (ph.caption ? '<br>' + esc(ph.caption) : '')
+        + (ph.mine ? '<br><button type="button" class="ph-del" data-del="' + ph.id + '">Удалить моё фото</button>' : '')
+        + '</figcaption></figure>').join('');
     } catch (e) {
       gallery.innerHTML = '<div class="roster-empty">Не удалось загрузить альбом</div>';
     }
   }
+
+  gallery.addEventListener('click', async (ev) => {
+    const btn = ev.target.closest('button.ph-del');
+    if (!btn) return;
+    if (!confirm('Убрать это фото из альбома? Вернуть не получится.')) return;
+    const tok = localStorage.getItem(TOKEN_KEY) || '';
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/photos/' + btn.dataset.del + '?token=' + encodeURIComponent(tok),
+                              { method: 'DELETE' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      loadGallery();
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = 'Не вышло — попробуйте ещё раз';
+    }
+  });
   refreshUploadBox();
   loadGallery();
 

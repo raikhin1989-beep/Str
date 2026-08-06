@@ -177,7 +177,8 @@ def admin_status(_: None = Depends(admin_auth)):
         last_sent = conn.execute(
             "SELECT sent_at FROM outbox WHERE sent_at IS NOT NULL"
             " ORDER BY sent_at DESC LIMIT 1").fetchone()
-        last_poll = db.get_setting(conn, "last_webhook_at")
+        last_poll = db.get_setting(conn, "last_poll_at")
+        last_update = db.get_setting(conn, "last_webhook_at")
 
     backup_dir = Path(os.environ.get("STR_BACKUP_DIR", "/opt/str-api/backups"))
     snaps = sorted(backup_dir.glob("str-*.db.gz")) if backup_dir.exists() else []
@@ -193,6 +194,7 @@ def admin_status(_: None = Depends(admin_auth)):
         "telegram": {
             "bot": BOT_USERNAME,
             "last_poll_at": last_poll or None,
+            "last_update_at": last_update or None,
             "queue_pending": pending,
             "last_sent_at": last_sent["sent_at"] if last_sent else None,
         },
@@ -709,6 +711,7 @@ def admin_telegram(_: None = Depends(admin_auth)):
             "SELECT sent_at FROM outbox WHERE sent_at IS NOT NULL"
             " ORDER BY sent_at DESC LIMIT 1").fetchone()
         last_hook = db.get_setting(conn, "last_webhook_at")
+        last_poll = db.get_setting(conn, "last_poll_at")
         if not host and not code:
             code = db.new_link_code()
             db.set_setting(conn, "host_link_code", code)
@@ -724,6 +727,7 @@ def admin_telegram(_: None = Depends(admin_auth)):
         "queue_sent": sent,
         "last_sent_at": last["sent_at"] if last else None,
         "last_webhook_at": last_hook or None,
+        "last_poll_at": last_poll or None,
     }
 
 
@@ -894,6 +898,11 @@ def tg_updates(payload: TgUpdates, _: None = Depends(admin_auth)):
     with db.get_conn() as conn:
         if max_id:
             db.set_setting(conn, "tg_offset", str(max_id + 1))
+        # Факт опроса отмечаем всегда, а не только когда что-то пришло.
+        # Пустой ответ — норма: гости жмут «Старт» редко, и если засчитывать
+        # опросом лишь непустые пачки, отметка застынет на неделю и админка
+        # начнёт врать, что приём обновлений встал.
+        db.set_setting(conn, "last_poll_at", now_iso())
         if processed:
             db.set_setting(conn, "last_webhook_at", now_iso())
     return {"processed": processed, "next_offset": max_id + 1 if max_id else None}
@@ -957,7 +966,7 @@ def playlist():
 
 
 # ── ФОТОАЛЬБОМ ──────────────────────────────────────────────────────────────
-# Гость приносит любимое или совместное фото с имениником. Файлы лежат на
+# Гость приносит любимое или совместное фото с именинником. Файлы лежат на
 # диске рядом с базой, в SQLite только метаданные.
 #
 # Каждое фото пересохраняется через Pillow, и это не косметика:
@@ -988,18 +997,28 @@ def _guest_by_token(conn, token: str):
 
 
 @app.get("/api/photos")
-def photos_list():
-    """Публичный альбом: id, кто принёс (сокращённо) и подпись."""
+def photos_list(token: str = ""):
+    """Публичный альбом: id, кто принёс (сокращённо) и подпись.
+
+    С токеном заявки дополнительно помечает флагом `mine` фото самого
+    гостя — только его собственные. Без этого страница не знает, у какой
+    карточки рисовать «Удалить»: снимок мог приехать с другого устройства,
+    и списка своих загрузок в браузере может не быть.
+    """
     with db.get_conn() as conn:
         rows = conn.execute(
-            "SELECT p.id, p.caption, p.created_at, g.name"
+            "SELECT p.id, p.caption, p.created_at, p.guest_id, g.name"
             " FROM photos p JOIN guests g ON g.id = p.guest_id"
             " ORDER BY p.created_at DESC, p.id DESC"
         ).fetchall()
+        me = _guest_by_token(conn, token)
+    my_id = me["id"] if me else None
     return {
         "count": len(rows),
         "photos": [{"id": r["id"], "name": short_name(r["name"]),
-                    "caption": r["caption"]} for r in rows],
+                    "caption": r["caption"],
+                    "mine": my_id is not None and r["guest_id"] == my_id}
+                   for r in rows],
     }
 
 

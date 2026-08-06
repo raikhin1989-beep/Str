@@ -44,9 +44,15 @@ jobs:
         env:
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
         run: |
-          r=$(curl -sS --max-time 30 -u "admin:$ADMIN_PASSWORD" -X POST \
-                https://raikhin.duckdns.org/api/admin/reminders/run 2>&1 || true)
-          echo "напоминания: $r"
+          # Раньше здесь стояло «|| true», и ответ просто печатался: при
+          # неверном пароле или пятисотке шаг оставался зелёным. Напоминание
+          # уходит один раз, 20 августа, — молча провалиться ему нельзя.
+          code=$(curl -sS --max-time 30 -u "admin:$ADMIN_PASSWORD" -X POST \
+                   -o /tmp/rem.json -w '%{http_code}' \
+                   https://raikhin.duckdns.org/api/admin/reminders/run) || {
+            echo "не достучались до сервера"; exit 1; }
+          echo "напоминания ($code): $(cat /tmp/rem.json)"
+          [ "$code" = "200" ] || { echo "сервер ответил $code"; exit 1; }
 
       - name: Send queued messages
         env:

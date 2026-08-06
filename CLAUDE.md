@@ -25,7 +25,7 @@ Keep backend source out of `/var/www/html`: that directory is world-readable ove
 
 `.github/workflows/deploy.yml` remains the only executable logic. It deploys over SSH from a GitHub-hosted runner:
 
-- **Push to `main` deploys.** The `push` trigger is filtered to `site/**` and the workflow file itself, so doc-only commits don't redeploy. `workflow_dispatch` also offers `deploy` and `inspect` (read-only probe: OS, listeners on 80/443, Caddy status, live `Caddyfile`, issued certs, `version`, disk).
+- **Push to `main` deploys.** The `push` trigger is filtered to `site/**`, `backend/**` and the workflow file itself, so doc-only commits don't redeploy. `workflow_dispatch` also offers `deploy` and `inspect` (read-only probe: OS, listeners on 80/443, Caddy status, live `Caddyfile`, issued certs, `version`, disk).
 - **Files travel by `rsync` over `sshpass`, not through the action's `envs`.** An earlier version base64'd the site into an environment variable; that silently stopped delivering once self-hosted fonts pushed the payload past ~450 KB. Do not reintroduce it — binary assets belong in an rsync.
 - **Whatever is in `site/` becomes the docroot**, synced with `--delete`. Files removed from `site/` disappear from the server, so don't hand-place files on the host expecting them to survive.
 - **The backend is rebuilt in place each deploy:** venv at `/opt/str-api/venv`, `pip install -r requirements.txt`, systemd unit regenerated with `APP_VERSION` set to the commit SHA, then `systemctl restart str-api`. The deploy fails loudly (dumping `journalctl -u str-api`) if `/api/health` does not answer within ~50 s.
